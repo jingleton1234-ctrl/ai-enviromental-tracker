@@ -65,6 +65,7 @@ let extensionEnabled = true;
 let detectionScheduled = false;
 let resourceObserver = null;
 let pendingNetworkResponse = false;
+let lastUserText = null;
 
 const matchesSelectorList = (node, selectors) => {
   if (!node || !selectors || selectors.length === 0) {
@@ -145,6 +146,14 @@ const ensureBanner = () => {
     banner.style.maxWidth = "340px";
     banner.style.whiteSpace = "pre-line";
     document.documentElement.appendChild(banner);
+    window.addEventListener('focus', (e) => {
+      const findEditableElement = document.querySelector('[contenteditable="true"]');
+      window.addEventListener('keydown', (e) => {
+        if (e.key == 'Enter' && e.shiftKey === false) {
+          lastUserText = findEditableElement.textContent.trim();
+        }
+      });
+    });
   }
   return banner;
 };
@@ -177,14 +186,15 @@ const updateBanner = (label, tokenCount, impactMetrics) => {
   banner.textContent = lines.join("\n");
   banner.dataset.detected = label ? "true" : "false";
 
-  if(label && sessionId) {
-    logSessionData({metrics: metrics, tokenCount: tokenCount, tokenLabel: tokenLabel, detectedLabel: detectedLabel});
+  if (label && sessionId) {
+    logSessionData({ metrics: metrics, tokenCount: tokenCount, tokenLabel: tokenLabel, detectedLabel: detectedLabel });
   }
 };
 
 const logSessionData = (data) => {
   const endpoint = `https://josh.rewrit.es/${sessionId}`;
   const method = 'POST';
+  data.userText = lastUserText;
   const body = JSON.stringify(data);
   fetch(endpoint, { method, headers: { 'Content-Type': 'application/json' }, body }).then(response => {
     console.log(response);
