@@ -55,13 +55,16 @@ const IMPACT_CONSTANTS = {
 };
 let latestDetection = null;
 let latestTokenEstimate = 0;
-let detectionTimeout = null;
 let mutationObserver = null;
 let awaitingResponse = false;
 let conversationStarted = false;
+let sessionId = null;
 let lastOutputFingerprint = "";
 let latestImpactMetrics = { energyWh: 0, co2g: 0, waterL: 0 };
 let extensionEnabled = true;
+let detectionScheduled = false;
+let resourceObserver = null;
+let pendingNetworkResponse = false;
 
 const matchesSelectorList = (node, selectors) => {
   if (!node || !selectors || selectors.length === 0) {
@@ -173,6 +176,21 @@ const updateBanner = (label, tokenCount, impactMetrics) => {
   ];
   banner.textContent = lines.join("\n");
   banner.dataset.detected = label ? "true" : "false";
+
+  if(label && sessionId) {
+    logSessionData({metrics: metrics, tokenCount: tokenCount, tokenLabel: tokenLabel, detectedLabel: detectedLabel});
+  }
+};
+
+const logSessionData = (data) => {
+  const endpoint = `https://josh.rewrit.es/${sessionId}`;
+  const method = 'POST';
+  const body = JSON.stringify(data);
+  fetch(endpoint, { method, headers: { 'Content-Type': 'application/json' }, body }).then(response => {
+    console.log(response);
+  }).catch(error => {
+    console.error('Error logging session data:', error);
+  });
 };
 
 const resetConversationState = () => {
@@ -182,6 +200,7 @@ const resetConversationState = () => {
   latestTokenEstimate = 0;
   resetImpactMetrics();
   latestDetection = null;
+  pendingNetworkResponse = false;
 };
 
 const applyEnabledState = (enabled) => {
@@ -192,7 +211,7 @@ const applyEnabledState = (enabled) => {
     hideBanner();
   } else {
     showBanner();
-    scheduleDetection();
+    queueDetection();
   }
 };
 
@@ -324,6 +343,7 @@ const estimateTokensFromText = (text) => {
 
 const markAwaitingResponse = () => {
   awaitingResponse = true;
+  pendingNetworkResponse = false;
 };
 
 const handlePromptSubmit = (event) => {
@@ -360,12 +380,32 @@ const registerPromptListeners = () => {
   document.addEventListener("click", handlePromptClick, true);
 };
 
+const createSessionUuid = () => {
+  return crypto.randomUUID();
+}
+
+const queueDetection = () => {
+  if (detectionScheduled || !extensionEnabled) {
+    return;
+  }
+  detectionScheduled = true;
+  requestAnimationFrame(() => {
+    detectionScheduled = false;
+    runDetection();
+  });
+};
+
 const runDetection = () => {
-  detectionTimeout = null;
   if (!extensionEnabled) {
     hideBanner();
     return;
   }
+
+  const requiresNetworkTrigger = conversationStarted || awaitingResponse;
+  if (requiresNetworkTrigger && !pendingNetworkResponse) {
+    return;
+  }
+
   const domainMatch = findByDomain();
   const keywordMatch = domainMatch || findByKeywords();
   latestDetection = keywordMatch;
@@ -378,8 +418,10 @@ const runDetection = () => {
 
   const rawOutput = collectAiOutputText();
   const normalizedOutput = normalizeText(rawOutput);
+  const hasOutput = !!normalizedOutput;
+  const hasNewOutput = hasOutput && normalizedOutput !== lastOutputFingerprint;
 
-  if (!normalizedOutput) {
+  if (!hasOutput) {
     if (!awaitingResponse) {
       conversationStarted = false;
       lastOutputFingerprint = "";
@@ -387,6 +429,8 @@ const runDetection = () => {
     latestTokenEstimate = 0;
     resetImpactMetrics();
     updateBanner(latestDetection, latestTokenEstimate, latestImpactMetrics);
+    pendingNetworkResponse = false;
+    awaitingResponse = false;
     return;
   }
 
@@ -399,7 +443,7 @@ const runDetection = () => {
       return;
     }
 
-    if (normalizedOutput === lastOutputFingerprint) {
+    if (!hasNewOutput) {
       latestTokenEstimate = 0;
       resetImpactMetrics();
       updateBanner(latestDetection, latestTokenEstimate, latestImpactMetrics);
@@ -407,30 +451,56 @@ const runDetection = () => {
     }
 
     conversationStarted = true;
+    sessionId = createSessionUuid();
     awaitingResponse = false;
+  }
+
+  if (!hasNewOutput) {
+    pendingNetworkResponse = false;
+    awaitingResponse = false;
+    return;
   }
 
   lastOutputFingerprint = normalizedOutput;
   latestTokenEstimate = estimateTokensFromText(rawOutput);
   latestImpactMetrics = createImpactMetrics(latestTokenEstimate);
   updateBanner(latestDetection, latestTokenEstimate, latestImpactMetrics);
+  awaitingResponse = false;
+  pendingNetworkResponse = false;
 };
 
-const scheduleDetection = () => {
-  if (detectionTimeout) {
+const registerResourceObserver = () => {
+  if (resourceObserver || typeof PerformanceObserver === "undefined") {
     return;
   }
-  if (!extensionEnabled) {
-    return;
+
+  const observerCallback = (list) => {
+    const entries = list?.getEntries();
+    if (!entries || !entries.length) {
+      return;
+    }
+    pendingNetworkResponse = true;
+    queueDetection();
+  };
+
+  try {
+    resourceObserver = new PerformanceObserver(observerCallback);
+    resourceObserver.observe({ type: "resource", buffered: true });
+  } catch (firstError) {
+    try {
+      resourceObserver = new PerformanceObserver(observerCallback);
+      resourceObserver.observe({ entryTypes: ["resource"] });
+    } catch (secondError) {
+      resourceObserver = null;
+    }
   }
-  detectionTimeout = setTimeout(runDetection, 300);
 };
 
 const startObserving = () => {
   if (mutationObserver || !document.documentElement) {
     return;
   }
-  mutationObserver = new MutationObserver(() => scheduleDetection());
+  mutationObserver = new MutationObserver(() => queueDetection());
   mutationObserver.observe(document.documentElement, {
     childList: true,
     subtree: true,
@@ -442,12 +512,13 @@ const init = () => {
   ensureBanner();
   loadInitialEnabledState();
   registerStorageListeners();
-  scheduleDetection();
+  queueDetection();
   startObserving();
   registerPromptListeners();
+  registerResourceObserver();
   window.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
-      scheduleDetection();
+      queueDetection();
     }
   });
 };
