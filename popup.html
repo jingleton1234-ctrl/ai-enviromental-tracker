@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Detector</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 16px;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        background: #0f172a;
+        color: #f8fafc;
+        min-width: 220px;
+      }
+      h1 {
+        font-size: 16px;
+        margin: 0 0 12px;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        color: #38bdf8;
+      }
+      #status {
+        font-size: 18px;
+        font-weight: 600;
+      }
+      #token-count {
+        font-size: 14px;
+        margin-top: 6px;
+        color: #e2e8f0;
+      }
+      .toggle-wrapper {
+        margin-top: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .toggle-wrapper label {
+        font-size: 13px;
+        color: #cbd5f5;
+      }
+      #toggle-extension {
+        border: none;
+        border-radius: 8px;
+        padding: 10px 14px;
+        font-size: 14px;
+        font-weight: 600;
+        color: #0f172a;
+        cursor: pointer;
+        transition: transform 0.1s ease, box-shadow 0.1s ease;
+      }
+      #toggle-extension.enabled {
+        background: linear-gradient(135deg, #34d399, #10b981);
+        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+      }
+      #toggle-extension.disabled {
+        background: linear-gradient(135deg, #f87171, #ef4444);
+        box-shadow: 0 4px 12px rgba(248, 113, 113, 0.35);
+      }
+      #toggle-extension:active {
+        transform: scale(0.98);
+      }
+      .metrics {
+        margin-top: 16px;
+        padding: 12px;
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.6);
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .metrics h2 {
+        margin: 0;
+        font-size: 13px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #94a3b8;
+      }
+      .metric-line {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .metric-title {
+        font-size: 12px;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        color: #cbd5f5;
+      }
+      .metric-value {
+        font-size: 15px;
+        font-weight: 600;
+        color: #38bdf8;
+      }
+      .note {
+        font-size: 12px;
+        margin-top: 12px;
+        color: #cbd5f5;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>AI detected:</h1>
+    <div id="status">Checking current tab...</div>
+    <div id="token-count">Tokens detected: --</div>
+    <div class="toggle-wrapper">
+      <label>Extension status</label>
+      <button id="toggle-extension" class="enabled">Turn off detector</button>
+    </div>
+    <section class="metrics">
+      <h2>Estimated Impact</h2>
+      <div class="metric-line">
+        <span class="metric-title">Electricity consumed</span>
+        <strong class="metric-value" id="metric-energy">-- Wh</strong>
+      </div>
+      <div class="metric-line">
+        <span class="metric-title">CO2 produced</span>
+        <strong class="metric-value" id="metric-co2">-- g</strong>
+      </div>
+      <div class="metric-line">
+        <span class="metric-title">Water consumed</span>
+        <strong class="metric-value" id="metric-water">-- L</strong>
+      </div>
+    </section>
+    <div class="note">This popup mirrors the badge shown on the page.</div>
+    <script src="popup.js"></script>
+  </body>
+</html>
