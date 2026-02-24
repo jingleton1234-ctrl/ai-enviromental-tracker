@@ -7,8 +7,9 @@ This lightweight Chrome extension watches every tab you open, looks for hints th
 - Shows an on-page pill so the message is always visible without opening the popup.
 - Popup summarizes the latest detection and estimates how many output tokens are currently on the page (while ignoring anything you type into the prompt box and staying at zero until the first reply arrives).
 - Token counts are converted into rough sustainability metrics (electricity, CO2, and water) so you get a sense of the impact of each response.
+- Session logs include refined topic detection for both the prompt and the AI response, with weighted confidence-based category matching.
 - Toggle button lets you temporarily pause or resume detection for all tabs.
-- Zero tracking or network calls - everything happens locally inside Chrome.
+- Uses lightweight POST logging for detected AI sessions; see `contentScript.js` for payload details.
 
 ## Installing
 1. Open Chrome and visit `chrome://extensions`.
@@ -23,9 +24,9 @@ This lightweight Chrome extension watches every tab you open, looks for hints th
 - If you visit a site the extension doesn't recognize, the banner will read `AI detected: None`.
 
 ## How the impact estimates work
-- Electricity: Assumes ~0.5 Wh per 1k output tokens (0.0005 Wh/token).
-- CO2: Assumes ~0.2 g of CO2 per 1k output tokens (0.0002 g/token).
-- Water: Assumes ~0.1 L of water per 1k output tokens (0.0001 L/token).
+- Electricity: Assumes 0.00083 Wh/token (~0.83 Wh per 1k output tokens).
+- CO2: Assumes 0.43 mg/token (0.00043 g/token, ~0.43 g per 1k output tokens).
+- Water: Assumes 0.01 ml/token (0.00001 L/token, ~10 ml per 1k output tokens).
 
 These numbers are intentionally conservative heuristics inspired by a mix of public reports. Adjust `IMPACT_CONSTANTS` in `contentScript.js` if you want to plug in different assumptions.
 

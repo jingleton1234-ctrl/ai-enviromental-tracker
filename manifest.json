@@ -1,11 +1,18 @@
 ﻿{
   "manifest_version": 3,
-  "name": "AI Detector Companion",
+  "name": "AI Resource Tracker",
   "description": "Automatically detects which AI service appears on the current tab and displays it to the user.",
   "version": "1.0.0",
   "permissions": ["tabs", "storage"],
+  "host_permissions": [
+    "https://script.google.com/*",
+    "https://script.googleapis.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
-    "default_title": "AI Detector",
+    "default_title": "AI Resource Tracker",
     "default_popup": "popup.html"
   },
   "content_scripts": [
