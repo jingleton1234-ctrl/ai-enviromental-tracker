@@ -28,6 +28,10 @@ const rollingChartAxisEl = document.getElementById("rolling-chart-axis");
 const rollingAxisMaxEl = document.getElementById("rolling-axis-max");
 const rollingAxisMidEl = document.getElementById("rolling-axis-mid");
 const rollingAxisMinEl = document.getElementById("rolling-axis-min");
+const allTimeTokensEl = document.getElementById("all-time-tokens");
+const allTimeElectricityEl = document.getElementById("all-time-electricity");
+const allTimeCo2El = document.getElementById("all-time-co2");
+const allTimeWaterEl = document.getElementById("all-time-water");
 const modelChartGridEl = document.getElementById("model-chart-grid");
 const modelChartLabelsEl = document.getElementById("model-chart-labels");
 const modelChartScrollEl = document.getElementById("model-chart-scroll");
@@ -40,6 +44,8 @@ let extensionEnabled = true;
 const PARTICIPANT_ID_KEY = "participantId";
 const DAILY_TOTALS_KEY = "dailyTotals";
 const DAILY_TOKEN_GOAL_KEY = "dailyTokenGoal";
+const ALL_TIME_TOKEN_TOTAL_KEY = "allTimeTokenTotal";
+const ALL_TIME_TOTALS_KEY = "allTimeTotals";
 const METRICS_AUTO_UNLOCK_AT_LOCAL_MS = new Date(2026, 1, 20, 14, 17, 0, 0).getTime();
 const MODEL_MIX_COLOR_PALETTE = [
   "#0ea5e9",
@@ -55,8 +61,6 @@ const MODEL_MIX_COLOR_PALETTE = [
 ];
 const ROLLING_HISTORY_DAYS = 60;
 let environmentalMetricsVisible = false;
-let rollingScrollLockPosition = 0;
-let modelScrollLockPosition = 0;
 
 const formatUnlockLabel = (timestampMs) => {
   const date = new Date(timestampMs);
@@ -79,27 +83,7 @@ const updateStatus = (message) => {
 };
 
 const registerChartForwardScrollLock = () => {
-  if (rollingChartScrollEl) {
-    rollingChartScrollEl.addEventListener("scroll", () => {
-      const current = rollingChartScrollEl.scrollLeft;
-      if (current > rollingScrollLockPosition) {
-        rollingChartScrollEl.scrollLeft = rollingScrollLockPosition;
-        return;
-      }
-      rollingScrollLockPosition = current;
-    });
-  }
-
-  if (modelChartScrollEl) {
-    modelChartScrollEl.addEventListener("scroll", () => {
-      const current = modelChartScrollEl.scrollLeft;
-      if (current > modelScrollLockPosition) {
-        modelChartScrollEl.scrollLeft = modelScrollLockPosition;
-        return;
-      }
-      modelScrollLockPosition = current;
-    });
-  }
+  // Intentionally no-op: users should be able to scroll both directions freely.
 };
 
 const sanitizeParticipantId = (value) => {
@@ -448,7 +432,6 @@ const renderRollingModelMixChart = (mixData) => {
   });
   if (modelChartScrollEl) {
     modelChartScrollEl.scrollLeft = modelChartScrollEl.scrollWidth;
-    modelScrollLockPosition = modelChartScrollEl.scrollLeft;
   }
 };
 
@@ -464,7 +447,7 @@ const getRollingDailyTokenSeries = (totals, days = 7) => {
       continue;
     }
     const dateKey = getIsoLocalDate(pointDate);
-    const value = Number(source?.[dateKey]?.tokensTotal);
+    const value = Number(source?.[dateKey]?.tokensOut);
     series.push({
       dateKey,
       tokens: Number.isFinite(value) && value > 0 ? Math.round(value) : 0
@@ -539,7 +522,6 @@ const renderRollingDailyChart = (series) => {
   });
   if (rollingChartScrollEl) {
     rollingChartScrollEl.scrollLeft = rollingChartScrollEl.scrollWidth;
-    rollingScrollLockPosition = rollingChartScrollEl.scrollLeft;
   }
 };
 
@@ -604,6 +586,47 @@ const renderDailyGoal = (todayTokens, goalTokens) => {
   }
 };
 
+const renderAllTimeTotals = (totals) => {
+  const source = totals && typeof totals === "object" ? totals : {};
+  const tokenTotal = toTokenCount(
+    source.tokensOutTotal != null ? source.tokensOutTotal : source.tokensTotal
+  );
+  const energyWh = Number(source.energyWh) || 0;
+  const co2g = Number(source.co2g) || 0;
+  const waterL = Number(source.waterL) || 0;
+
+  if (allTimeTokensEl) {
+    allTimeTokensEl.textContent = `Tokens: ${formatNudgeTokenCount(tokenTotal)} tokens`;
+  }
+  if (allTimeElectricityEl) {
+    allTimeElectricityEl.textContent = `Electricity: ${formatMetric(energyWh, "Wh")}`;
+  }
+  if (allTimeCo2El) {
+    allTimeCo2El.textContent = `CO2: ${formatMetric(co2g, "g")}`;
+  }
+  if (allTimeWaterEl) {
+    allTimeWaterEl.textContent = `Water: ${formatWaterMetric(waterL)}`;
+  }
+};
+
+const getFallbackAllTimeTotals = (data) => {
+  if (data?.[ALL_TIME_TOTALS_KEY] && typeof data[ALL_TIME_TOTALS_KEY] === "object") {
+    const totals = data[ALL_TIME_TOTALS_KEY];
+    return {
+      ...totals,
+      tokensOutTotal: Number(totals?.tokensOutTotal) || 0
+    };
+  }
+  return { tokensOutTotal: 0, energyWh: 0, co2g: 0, waterL: 0 };
+};
+
+const renderAllTimeFallback = () => {
+  if (!allTimeTokensEl && !allTimeElectricityEl && !allTimeCo2El && !allTimeWaterEl) {
+    return;
+  }
+  renderAllTimeTotals({ tokensOutTotal: 0, energyWh: 0, co2g: 0, waterL: 0 });
+};
+
 const saveDailyGoal = () => {
   if (!goalInputEl) {
     return;
@@ -617,26 +640,35 @@ const saveDailyGoal = () => {
 const loadAndRenderDailyStats = () => {
   applyEnvironmentalMetricsVisibility();
   if (!environmentalMetricsVisible) {
+    renderAllTimeFallback();
     return;
   }
-  chrome.storage.local.get({ [DAILY_TOTALS_KEY]: {}, [DAILY_TOKEN_GOAL_KEY]: null }, (data) => {
+  chrome.storage.local.get(
+    {
+      [DAILY_TOTALS_KEY]: {},
+      [DAILY_TOKEN_GOAL_KEY]: null,
+      [ALL_TIME_TOKEN_TOTAL_KEY]: 0,
+      [ALL_TIME_TOTALS_KEY]: { tokensTotal: 0, tokensOutTotal: 0, energyWh: 0, co2g: 0, waterL: 0 }
+    },
+    (data) => {
     const totals = data?.[DAILY_TOTALS_KEY] && typeof data[DAILY_TOTALS_KEY] === "object"
       ? data[DAILY_TOTALS_KEY]
       : {};
     const goalTokens = toGoalValue(data?.[DAILY_TOKEN_GOAL_KEY]);
+    const allTimeTotals = getFallbackAllTimeTotals(data);
     if (goalInputEl) {
       goalInputEl.value = goalTokens === null ? "" : String(goalTokens);
     }
     const today = new Date();
     const todayKey = getIsoLocalDate(today);
-    const todayTokens = toTokenCount(totals?.[todayKey]?.tokensTotal);
+    const todayTokens = toTokenCount(totals?.[todayKey]?.tokensOut);
     let averageTokens = null;
 
     let averageSum = 0;
     let averageCount = 0;
     for (let i = 1; i <= 7; i += 1) {
       const dateKey = getIsoLocalDate(shiftDate(today, -i));
-      const tokens = Number(totals?.[dateKey]?.tokensTotal);
+      const tokens = Number(totals?.[dateKey]?.tokensOut);
       if (Number.isFinite(tokens)) {
         averageSum += tokens;
         averageCount += 1;
@@ -654,6 +686,7 @@ const loadAndRenderDailyStats = () => {
     };
     renderTodayVsAverage(summary);
     renderDailyGoal(todayTokens, goalTokens);
+    renderAllTimeTotals(allTimeTotals);
     renderRollingDailyChart(getRollingDailyTokenSeries(totals, ROLLING_HISTORY_DAYS));
     renderRollingModelMixChart(getRollingModelMixSeries(totals, ROLLING_HISTORY_DAYS));
   });
@@ -668,6 +701,12 @@ const registerStorageListeners = () => {
       return;
     }
     if (Object.prototype.hasOwnProperty.call(changes, DAILY_TOTALS_KEY)) {
+      loadAndRenderDailyStats();
+    }
+    if (Object.prototype.hasOwnProperty.call(changes, ALL_TIME_TOKEN_TOTAL_KEY)) {
+      loadAndRenderDailyStats();
+    }
+    if (Object.prototype.hasOwnProperty.call(changes, ALL_TIME_TOTALS_KEY)) {
       loadAndRenderDailyStats();
     }
     if (Object.prototype.hasOwnProperty.call(changes, PARTICIPANT_ID_KEY)) {

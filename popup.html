@@ -131,21 +131,6 @@
       #toggle-extension:active {
         transform: scale(0.98);
       }
-      .metrics-gate {
-        margin-top: 12px;
-        padding: 12px;
-        border: 1px dashed rgba(148, 163, 184, 0.45);
-        border-radius: 8px;
-        background: rgba(15, 23, 42, 0.45);
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-      }
-      #metrics-gate-note {
-        font-size: 12px;
-        color: #cbd5f5;
-        line-height: 1.4;
-      }
       .metrics {
         margin-top: 16px;
         padding: 12px;
@@ -298,25 +283,29 @@
       }
       .chart-grid {
         height: 120px;
-        display: flex;
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: 20px;
+        column-gap: 10px;
         align-items: flex-end;
-        gap: 6px;
         width: max-content;
         min-width: 100%;
       }
       .chart-bar {
-        flex: 0 0 20px;
         border-radius: 6px 6px 2px 2px;
         background: linear-gradient(180deg, #38bdf8, #0ea5e9);
         min-height: 4px;
       }
       .chart-labels {
         margin-top: 6px;
-        display: flex;
-        gap: 6px;
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: 20px;
+        column-gap: 10px;
+        width: max-content;
+        min-width: 100%;
       }
       .chart-label {
-        flex: 0 0 20px;
         font-size: 10px;
         color: #cbd5f5;
         text-align: center;
@@ -324,6 +313,37 @@
       .chart-empty {
         font-size: 12px;
         color: #cbd5f5;
+      }
+      .chart-total {
+        margin-top: 8px;
+        font-size: 12px;
+        color: #e2e8f0;
+      }
+      .all-time-totals {
+        margin-top: 12px;
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.6);
+        overflow: hidden;
+      }
+      .all-time-totals summary {
+        cursor: pointer;
+        padding: 12px;
+        font-size: 13px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #94a3b8;
+        user-select: none;
+      }
+      .all-time-content {
+        padding: 0 12px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .all-time-line {
+        font-size: 13px;
+        color: #e2e8f0;
       }
       .model-chart {
         margin-top: 12px;
@@ -365,14 +385,15 @@
       }
       .model-chart-grid {
         height: 120px;
-        display: flex;
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: 20px;
+        column-gap: 10px;
         align-items: flex-end;
-        gap: 6px;
         width: max-content;
         min-width: 100%;
       }
       .model-day-stack {
-        flex: 0 0 20px;
         height: 120px;
         border-radius: 6px 6px 2px 2px;
         overflow: hidden;
@@ -386,11 +407,14 @@
       }
       .model-chart-labels {
         margin-top: 6px;
-        display: flex;
-        gap: 6px;
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: 20px;
+        column-gap: 10px;
+        width: max-content;
+        min-width: 100%;
       }
       .model-chart-label {
-        flex: 0 0 20px;
         font-size: 10px;
         color: #cbd5f5;
         text-align: center;
@@ -404,6 +428,11 @@
         display: flex;
         flex-wrap: wrap;
         gap: 6px;
+      }
+      .model-note {
+        margin-top: 8px;
+        font-size: 12px;
+        color: #cbd5f5;
       }
       .model-legend-item {
         display: inline-flex;
@@ -444,9 +473,6 @@
       <label>Extension status</label>
       <button id="toggle-extension" class="enabled">Turn off detector</button>
     </div>
-    <section class="metrics-gate" id="metrics-gate" hidden>
-      <div id="metrics-gate-note"></div>
-    </section>
     <div id="metrics-content">
       <section class="metrics">
         <h2>Estimated Impact</h2>
@@ -496,6 +522,15 @@
           <div class="chart-empty" id="rolling-chart-empty" hidden>No token history yet.</div>
         </div>
       </details>
+      <details class="all-time-totals">
+        <summary>Total Metrics Since Start</summary>
+        <div class="all-time-content">
+          <div class="all-time-line" id="all-time-tokens">Tokens: --</div>
+          <div class="all-time-line" id="all-time-electricity">Electricity: -- Wh</div>
+          <div class="all-time-line" id="all-time-co2">CO2: -- g</div>
+          <div class="all-time-line" id="all-time-water">Water: -- ml</div>
+        </div>
+      </details>
       <details class="model-chart">
         <summary>Daily Model Mix (up to 60d)</summary>
         <div class="model-chart-wrap">
@@ -512,6 +547,7 @@
           </div>
           <div class="model-chart-empty" id="model-chart-empty" hidden>No model usage data yet.</div>
           <div class="model-legend" id="model-chart-legend"></div>
+          <div class="model-note">Selecting lower-compute AI models can reduce computing time, energy consumption, and environmental impacts.</div>
         </div>
       </details>
     </div>

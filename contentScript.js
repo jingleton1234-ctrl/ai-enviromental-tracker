@@ -203,6 +203,9 @@ let latestPromptInputText = "";
 let latestImpactPrompt = "";
 let latestAiOutputText = "";
 const DAILY_TOTALS_KEY = "dailyTotals";
+const DAILY_TOKEN_GOAL_KEY = "dailyTokenGoal";
+const ALL_TIME_TOKEN_TOTAL_KEY = "allTimeTokenTotal";
+const ALL_TIME_TOTALS_KEY = "allTimeTotals";
 const CONVERSATION_SESSION_MAP_KEY = "conversationSessionMap";
 const PARTICIPANT_ID_KEY = "participantId";
 const METRICS_AUTO_UNLOCK_AT_LOCAL_MS = new Date(2026, 1, 20, 14, 17, 0, 0).getTime();
@@ -224,7 +227,7 @@ const DAILY_TOTALS_RETENTION_DAYS = 60;
 const IMPACT_PROMPT_STATE_KEY = "impactPromptState";
 const IMPACT_PROMPT_VERSION = 2;
 const IMPACT_PROMPT_CACHE_TTL_MS = 1500;
-const INTERACTION_LOG_DEBOUNCE_MS = 3000;
+const INTERACTION_LOG_DEBOUNCE_MS = 1500;
 const OUTPUT_SETTLE_GRACE_MS = 4000;
 const EQUIVALENT_BOX_HEIGHT_PX = 56;
 const QUICK_FOLLOWUP_WINDOW_MS = 30000;
@@ -236,6 +239,17 @@ const QUICK_FOLLOWUP_NUDGE_ID = "ai-detector-quick-followup-nudge";
 const NEW_CHAT_NUDGE_ID = "ai-detector-new-chat-nudge";
 const BANNER_EDGE_PADDING_PX = 8;
 const NEW_CHAT_NUDGE_STATE_KEY = "newChatNudgeState";
+const THINKING_GUARD_PROVIDERS = new Set(["gemini", "copilot", "claude", "perplexity"]);
+const THINKING_STATUS_PATTERNS = [
+  /\bthinking\b/i,
+  /\bsearching\b/i,
+  /\banalyz(?:ing|e)\b/i,
+  /\breasoning\b/i,
+  /\bgathering\b/i,
+  /\bworking on it\b/i,
+  /\bthought for\b/i,
+  /\blet me think\b/i
+];
 let impactPromptCache = {
   dayKey: "",
   fetchedAt: 0,
@@ -244,6 +258,8 @@ let impactPromptCache = {
 };
 let pendingInteractionLogTimers = new Map();
 let sentInteractionIds = new Set();
+let interactionPromptSubmittedAtById = new Map();
+let lastLoggedOutputTokensBySession = new Map();
 let lastOutputUpdateAt = 0;
 let lastPromptSubmittedAt = 0;
 let lastPromptMarkAt = 0;
@@ -629,12 +645,16 @@ const saveBannerPosition = (banner) => {
     return;
   }
   const rect = banner.getBoundingClientRect();
-  chrome.storage.local.set({
-    [BANNER_POSITION_KEY]: {
-      left: Math.round(rect.left),
-      top: Math.round(rect.top)
-    }
-  });
+  try {
+    chrome.storage.local.set({
+      [BANNER_POSITION_KEY]: {
+        left: Math.round(rect.left),
+        top: Math.round(rect.top)
+      }
+    });
+  } catch (_error) {
+    // Ignore transient context invalidation during extension reload/update.
+  }
 };
 
 const loadBannerPosition = (banner) => {
@@ -1102,6 +1122,7 @@ const updateBanner = (label, tokenCount, impactMetrics) => {
   });
 
   if (label && sessionId && interactionId) {
+    const promptSubmission = interactionPromptSubmittedAtById.get(interactionId) || null;
     scheduleInteractionLog({
       metrics: metrics,
       tokenCount: tokenCount,
@@ -1113,10 +1134,9 @@ const updateBanner = (label, tokenCount, impactMetrics) => {
       modelProvider: modelDetection?.provider || "unknown",
       modelName: modelDetection?.model || "unknown",
       quickFollowupWithin30s: !!latestQuickFollowupMeta?.isQuickFollowup,
-      quickFollowupDeltaMs: latestQuickFollowupMeta?.deltaMs ?? null,
-      quickFollowupCountInSession: Number(latestQuickFollowupMeta?.quickFollowupCountInSession) || 0,
       sessionId: sessionId,
-      interactionId: interactionId
+      interactionId: interactionId,
+      promptSubmittedAt: promptSubmission?.iso || null
     });
   }
 };
@@ -1162,6 +1182,27 @@ const getIsoLocalDate = (date = new Date()) => {
   return `${year}-${month}-${day}`;
 };
 
+const toDailyGoalValue = (value) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? Math.round(numeric) : null;
+};
+
+const getDailyTokenGoalForLogging = () => {
+  if (!chrome?.storage?.local) {
+    return Promise.resolve("not set");
+  }
+  return new Promise((resolve) => {
+    chrome.storage.local.get({ [DAILY_TOKEN_GOAL_KEY]: null }, (data) => {
+      if (chrome.runtime?.lastError) {
+        resolve("not set");
+        return;
+      }
+      const goalValue = toDailyGoalValue(data?.[DAILY_TOKEN_GOAL_KEY]);
+      resolve(goalValue === null ? "not set" : goalValue);
+    });
+  });
+};
+
 const pruneOldDailyTotals = (dailyTotals) => {
   const totals = dailyTotals && typeof dailyTotals === "object" ? { ...dailyTotals } : {};
   const cutoff = new Date();
@@ -1183,11 +1224,17 @@ const addUsageToDailyTotals = (usage) => {
   }
 
   return new Promise((resolve) => {
-    chrome.storage.local.get({ [DAILY_TOTALS_KEY]: {} }, (data) => {
-      if (chrome.runtime?.lastError) {
-        resolve();
-        return;
-      }
+    chrome.storage.local.get(
+      {
+        [DAILY_TOTALS_KEY]: {},
+        [ALL_TIME_TOKEN_TOTAL_KEY]: 0,
+        [ALL_TIME_TOTALS_KEY]: { tokensTotal: 0, tokensOutTotal: 0, energyWh: 0, co2g: 0, waterL: 0 }
+      },
+      (data) => {
+        if (chrome.runtime?.lastError) {
+          resolve();
+          return;
+        }
 
       const dateKey = getIsoLocalDate();
       const currentTotals = data?.[DAILY_TOTALS_KEY] && typeof data[DAILY_TOTALS_KEY] === "object"
@@ -1225,18 +1272,39 @@ const addUsageToDailyTotals = (usage) => {
 
       currentTotals[dateKey] = nextTotals;
       const prunedTotals = pruneOldDailyTotals(currentTotals);
+      const nextAllTimeTokens = +(
+        (Number(data?.[ALL_TIME_TOKEN_TOTAL_KEY]) || 0)
+        + (Number(usage?.tokensOut) || 0)
+      ).toFixed(6);
+      const allTimeTotals = data?.[ALL_TIME_TOTALS_KEY] && typeof data[ALL_TIME_TOTALS_KEY] === "object"
+        ? data[ALL_TIME_TOTALS_KEY]
+        : {};
+      const nextAllTimeTotals = {
+        tokensTotal: +(Number(allTimeTotals?.tokensTotal || 0) + (Number(usage?.tokensTotal) || 0)).toFixed(6),
+        tokensOutTotal: +(Number(allTimeTotals?.tokensOutTotal || 0) + (Number(usage?.tokensOut) || 0)).toFixed(6),
+        energyWh: +(Number(allTimeTotals?.energyWh || 0) + (Number(usage?.wh) || 0)).toFixed(6),
+        co2g: +(Number(allTimeTotals?.co2g || 0) + (Number(usage?.co2_g) || 0)).toFixed(6),
+        waterL: +(Number(allTimeTotals?.waterL || 0) + (Number(usage?.water_L) || 0)).toFixed(6)
+      };
 
-      // Update daily totals at the same moment we record/send an interaction.
-      chrome.storage.local.set({ [DAILY_TOTALS_KEY]: prunedTotals }, () => resolve());
-    });
+        // Update daily totals at the same moment we record/send an interaction.
+        chrome.storage.local.set(
+          {
+            [DAILY_TOTALS_KEY]: prunedTotals,
+            [ALL_TIME_TOKEN_TOTAL_KEY]: nextAllTimeTokens,
+            [ALL_TIME_TOTALS_KEY]: nextAllTimeTotals
+          },
+          () => resolve()
+        );
+      }
+    );
   });
 };
 
 const logSessionData = async (data) => {
-  const resolvedUserId = await getOrCreateUserId();
-  if (!resolvedUserId) {
-    return;
-  }
+  const resolvedUserIdRaw = await getOrCreateUserId();
+  const resolvedUserId = resolvedUserIdRaw || "anonymous";
+  const dailyTokenGoal = await getDailyTokenGoalForLogging();
   const resolvedSessionId = sessionIdPromise
     ? await sessionIdPromise
     : (sessionId || createSessionUuid());
@@ -1248,6 +1316,8 @@ const logSessionData = async (data) => {
     ? Number(data.inputTokenCount)
     : 0;
   const outputTokens = Number(data?.tokenCount) || 0;
+  const previousOutputTokens = Number(lastLoggedOutputTokensBySession.get(resolvedSessionId)) || 0;
+  lastLoggedOutputTokensBySession.set(resolvedSessionId, outputTokens);
   const tokenRatioOutIn = inputTokens > 0 ? +(outputTokens / inputTokens).toFixed(6) : null;
   const promptTopicAnalysis = detectTopicFromText(data?.userText || latestPromptInputText || "");
   const responseTopicAnalysis = detectTopicFromText(data?.aiOutputText || latestAiOutputText || "");
@@ -1257,9 +1327,22 @@ const logSessionData = async (data) => {
   const waterMl = +((Number(data?.metrics?.waterL) || 0) * 1000).toFixed(6);
   const modelProvider = data?.modelProvider || latestModelDetection?.provider || "unknown";
   const modelName = data?.modelName || latestModelDetection?.model || "unknown";
+  const promptSubmittedAtIso = typeof data?.promptSubmittedAt === "string" && data.promptSubmittedAt.trim()
+    ? data.promptSubmittedAt.trim()
+    : null;
+  const nowMs = Date.now();
+  const sentAtIso = new Date(nowMs).toISOString();
+  const promptSubmittedAtMs = promptSubmittedAtIso ? Date.parse(promptSubmittedAtIso) : NaN;
+  const thinkingTimeSec = Number.isFinite(promptSubmittedAtMs)
+    ? +Math.max(0, (nowMs - promptSubmittedAtMs) / 1000).toFixed(3)
+    : null;
   const {
     userText: _ignoredUserText,
     aiOutputText: _ignoredAiOutputText,
+    modelConfidence: _ignoredModelConfidence,
+    model_confidence: _ignoredModelConfidenceSnake,
+    modelDetectionConfidence: _ignoredModelDetectionConfidence,
+    confidence: _ignoredRawConfidence,
     ...safeData
   } = data || {};
   const payload = {
@@ -1273,25 +1356,20 @@ const logSessionData = async (data) => {
     sessionId: data?.sessionId || resolvedSessionId,
     interactionId: data?.interactionId || interactionId,
     interactionNumber: resolvedInteractionNumber,
-    timestamp: new Date().toISOString(),
-    sentAt: new Date().toISOString(),
+    timestamp: sentAtIso,
+    sentAt: sentAtIso,
+    promptSubmittedAt: promptSubmittedAtIso,
+    thinkingTimeSec: thinkingTimeSec,
     tokenCountIn: inputTokens,
     tokenCountOut: outputTokens,
     tokenRatioOutIn: tokenRatioOutIn,
     tokensIn: inputTokens,
     tokensOut: outputTokens,
+    dailyTokenGoal: dailyTokenGoal,
     water_ml: waterMl,
     water_L: waterMl,
     topic: combinedTopicAnalysis.topic,
     topicScore: combinedTopicAnalysis.score,
-    topicConfidence: combinedTopicAnalysis.confidence,
-    topicSource: combinedTopicAnalysis.source,
-    promptTopic: promptTopicAnalysis.topic,
-    promptTopicScore: promptTopicAnalysis.score,
-    promptTopicConfidence: promptTopicAnalysis.confidence,
-    responseTopic: responseTopicAnalysis.topic,
-    responseTopicScore: responseTopicAnalysis.score,
-    responseTopicConfidence: responseTopicAnalysis.confidence,
     modelProvider: modelProvider,
     modelName: modelName
   };
@@ -1305,21 +1383,25 @@ const logSessionData = async (data) => {
     modelName: modelName,
     interactions: 1
   });
-  chrome.runtime.sendMessage(
-    {
-      type: "ai-detector:log",
-      payload
-    },
-    (response) => {
-      if (chrome.runtime?.lastError) {
-        console.error("Error logging session data:", chrome.runtime.lastError.message);
-        return;
+  try {
+    chrome.runtime.sendMessage(
+      {
+        type: "ai-detector:log",
+        payload
+      },
+      (response) => {
+        if (chrome.runtime?.lastError) {
+          console.error("Error logging session data:", chrome.runtime.lastError.message);
+          return;
+        }
+        if (!response?.ok) {
+          console.error("Error logging session data:", response?.error || "Unknown error");
+        }
       }
-      if (!response?.ok) {
-        console.error("Error logging session data:", response?.error || "Unknown error");
-      }
-    }
-  );
+    );
+  } catch (error) {
+    console.error("Error logging session data:", String(error));
+  }
 };
 
 const scheduleInteractionLog = (data) => {
@@ -1337,8 +1419,10 @@ const scheduleInteractionLog = (data) => {
 
       const recentlyUpdated = lastOutputUpdateAt > 0
         && Date.now() - lastOutputUpdateAt < OUTPUT_SETTLE_GRACE_MS;
+      const provider = data?.modelProvider || latestModelDetection?.provider || "unknown";
+      const stillThinking = isLikelyThinkingStatusText(provider, data?.aiOutputText || latestAiOutputText || "");
 
-      if (recentlyUpdated || pendingNetworkResponse || awaitingResponse) {
+      if (recentlyUpdated || pendingNetworkResponse || awaitingResponse || stillThinking) {
         queueLogAttempt();
         return;
       }
@@ -1351,6 +1435,7 @@ const scheduleInteractionLog = (data) => {
         }
       }
       logSessionData(data);
+      interactionPromptSubmittedAtById.delete(interactionKey);
     }, INTERACTION_LOG_DEBOUNCE_MS);
 
     pendingInteractionLogTimers.set(interactionKey, timer);
@@ -1381,6 +1466,8 @@ const resetConversationState = () => {
   lastPromptMarkAt = 0;
   quickFollowupCountInSession = 0;
   quickFollowupNextAlertCount = QUICK_FOLLOWUP_ALERT_THRESHOLD + 1;
+  lastLoggedOutputTokensBySession.clear();
+  interactionPromptSubmittedAtById.clear();
   latestQuickFollowupMeta = {
     isQuickFollowup: false,
     deltaMs: null,
@@ -1601,6 +1688,29 @@ const collectAiOutputText = () => {
 
 const normalizeText = (text) => (text || "").replace(/\s+/g, " ").trim();
 
+const extractTailSlice = (text, maxChars = 500) => {
+  const normalized = normalizeText(text);
+  if (!normalized) {
+    return "";
+  }
+  return normalized.slice(Math.max(0, normalized.length - maxChars));
+};
+
+const isLikelyThinkingStatusText = (provider, rawOutputText) => {
+  if (!THINKING_GUARD_PROVIDERS.has(provider)) {
+    return false;
+  }
+  const tail = extractTailSlice(rawOutputText, 500);
+  if (!tail) {
+    return false;
+  }
+  const tailWordCount = tail.split(" ").filter(Boolean).length;
+  if (tailWordCount > 80) {
+    return false;
+  }
+  return THINKING_STATUS_PATTERNS.some((pattern) => pattern.test(tail));
+};
+
 const estimateTokensFromText = (text) => {
   if (!text) {
     return 0;
@@ -1627,11 +1737,48 @@ const countRegexMatches = (text, pattern) => {
   return matches ? matches.length : 0;
 };
 
+const stemTopicToken = (token) => {
+  const word = String(token || "").toLowerCase();
+  if (!word) {
+    return "";
+  }
+  if (word.length > 5 && word.endsWith("ies")) {
+    return `${word.slice(0, -3)}y`;
+  }
+  if (word.length > 5 && word.endsWith("ing")) {
+    return word.slice(0, -3);
+  }
+  if (word.length > 4 && word.endsWith("ed")) {
+    return word.slice(0, -2);
+  }
+  if (word.length > 4 && word.endsWith("es")) {
+    return word.slice(0, -2);
+  }
+  if (word.length > 3 && word.endsWith("s")) {
+    return word.slice(0, -1);
+  }
+  return word;
+};
+
+const buildTopicStemCounts = (normalizedText) => {
+  const stemCounts = new Map();
+  const matches = normalizedText.match(/[a-z0-9]+(?:'[a-z0-9]+)?/gi) || [];
+  for (const token of matches) {
+    const stem = stemTopicToken(token);
+    if (!stem) {
+      continue;
+    }
+    stemCounts.set(stem, (stemCounts.get(stem) || 0) + 1);
+  }
+  return stemCounts;
+};
+
 const detectTopicFromText = (text) => {
   const normalized = (text || "").toLowerCase().replace(/\s+/g, " ").trim();
   if (!normalized) {
     return { topic: "Uncategorized", score: 0, confidence: 0, matchedTerms: [] };
   }
+  const stemCounts = buildTopicStemCounts(normalized);
 
   const ranked = TOPIC_RULES.map(({ topic, terms }) => {
     const termList = Array.isArray(terms) ? terms : [];
@@ -1644,7 +1791,10 @@ const detectTopicFromText = (text) => {
       if (!term) {
         return;
       }
-      const matchCount = countRegexMatches(normalized, buildTopicRegex(term));
+      const isMultiWordTerm = /\s/.test(term);
+      const matchCount = isMultiWordTerm
+        ? countRegexMatches(normalized, buildTopicRegex(term))
+        : (stemCounts.get(stemTopicToken(term)) || 0);
       if (matchCount <= 0) {
         return;
       }
@@ -1658,20 +1808,24 @@ const detectTopicFromText = (text) => {
       topic,
       score,
       hits,
+      uniqueTerms: matchedTerms.length,
       matchedTerms
     };
   }).sort((a, b) => b.score - a.score);
 
-  const top = ranked[0] || { topic: "Uncategorized", score: 0, hits: 0, matchedTerms: [] };
+  const top = ranked[0] || { topic: "Uncategorized", score: 0, hits: 0, uniqueTerms: 0, matchedTerms: [] };
   const runnerUpScore = ranked[1]?.score || 0;
   const hasStrongScore = top.score >= TOPIC_SCORE_MIN_FOR_CONFIDENT_MATCH;
+  const hasBreadthSignal = top.uniqueTerms >= 2 && top.score >= (TOPIC_SCORE_MIN_FOR_CONFIDENT_MATCH - 0.4);
   const hasClearMargin = top.score - runnerUpScore >= TOPIC_SCORE_TIE_MARGIN;
+  const hasSoftMargin = top.uniqueTerms >= 3 && (top.score - runnerUpScore) >= Math.max(0.3, TOPIC_SCORE_TIE_MARGIN * 0.5);
+  const isConfidentMatch = (hasStrongScore || hasBreadthSignal) && (hasClearMargin || hasSoftMargin);
 
-  if (!hasStrongScore || !hasClearMargin) {
+  if (!isConfidentMatch) {
     return {
       topic: "Uncategorized",
       score: +top.score.toFixed(3),
-      confidence: hasStrongScore ? 0.35 : 0,
+      confidence: (hasStrongScore || hasBreadthSignal) ? 0.35 : 0,
       matchedTerms: top.matchedTerms.slice(0, 6)
     };
   }
@@ -1762,6 +1916,16 @@ const markAwaitingResponse = (sourceNode = null) => {
   awaitingResponse = true;
   pendingNetworkResponse = false;
   interactionId = crypto.randomUUID();
+  interactionPromptSubmittedAtById.set(interactionId, {
+    ms: now,
+    iso: new Date(now).toISOString()
+  });
+  if (interactionPromptSubmittedAtById.size > 1000) {
+    const first = interactionPromptSubmittedAtById.keys().next();
+    if (!first.done) {
+      interactionPromptSubmittedAtById.delete(first.value);
+    }
+  }
   sessionIdPromise = resolveSessionIdForCurrentConversation().then((resolvedSession) => {
     sessionId = resolvedSession.sessionId;
     if (resolvedSession.isNewConversation) {
@@ -1991,11 +2155,13 @@ const runDetection = () => {
     return;
   }
   latestModelDetection = detectModelFromPage(latestDetection);
+  const providerKey = latestModelDetection?.provider || "unknown";
 
   const rawOutput = collectAiOutputText();
   const normalizedOutput = normalizeText(rawOutput);
   const hasOutput = !!normalizedOutput;
   const hasNewOutput = hasOutput && normalizedOutput !== lastOutputFingerprint;
+  const isThinkingStatus = isLikelyThinkingStatusText(providerKey, rawOutput);
 
   if (!hasOutput) {
     latestAiOutputText = "";
@@ -2034,10 +2200,14 @@ const runDetection = () => {
     }
 
     conversationStarted = true;
-    awaitingResponse = false;
+    awaitingResponse = isThinkingStatus;
   }
 
   if (!hasNewOutput) {
+    if (awaitingResponse && isThinkingStatus) {
+      pendingNetworkResponse = true;
+      return;
+    }
     pendingNetworkResponse = false;
     awaitingResponse = false;
     return;
@@ -2049,8 +2219,8 @@ const runDetection = () => {
   latestTokenEstimate = estimateTokensFromText(rawOutput);
   latestImpactMetrics = createImpactMetrics(latestTokenEstimate);
   updateBanner(latestDetection, latestTokenEstimate, latestImpactMetrics);
-  awaitingResponse = false;
-  pendingNetworkResponse = false;
+  awaitingResponse = isThinkingStatus;
+  pendingNetworkResponse = isThinkingStatus;
 };
 
 const registerResourceObserver = () => {
