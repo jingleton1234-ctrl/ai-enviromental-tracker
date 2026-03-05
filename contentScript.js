@@ -100,7 +100,12 @@ const PROVIDER_LABEL_TO_KEY = {
   "Google Gemini": "gemini",
   "Microsoft Copilot": "copilot",
   "Anthropic Claude": "claude",
-  "Perplexity": "perplexity"
+  "Perplexity": "perplexity",
+  "Poe": "poe",
+  "Character.AI": "character.ai",
+  "Inflection Pi": "pi",
+  "Notion AI": "notion",
+  "GitHub Copilot": "copilot"
 };
 
 const MODEL_CONTEXT_SELECTORS = [
@@ -157,6 +162,102 @@ const AI_OUTPUT_SELECTORS = [
   "main",
   "[role='main']"
 ];
+const COMMON_ASSISTANT_OUTPUT_SELECTORS = [
+  "[data-message-author-role='assistant']",
+  "[data-author='assistant']",
+  "[data-role='assistant']",
+  "[data-testid='assistant-message']",
+  "[data-testid*='assistant-message']",
+  "[data-testid*='assistant']",
+  "[data-testid*='response']",
+  "[role='main'] .markdown",
+  "main .markdown"
+];
+const COMMON_USER_OUTPUT_SELECTORS = [
+  "[data-message-author-role='human']",
+  "[data-message-author-role='user']",
+  "[data-author='human']",
+  "[data-author='user']",
+  "[data-role='user']",
+  "[data-testid='user-message']",
+  "[data-testid*='user-message']"
+];
+const PROVIDER_OUTPUT_SELECTORS = {
+  claude: [
+    "div.standard-markdown p.font-claude-response-body",
+    "div.standard-markdown .font-claude-response-body",
+    "p.font-claude-response-body",
+    "div.standard-markdown p",
+    "div.standard-markdown"
+  ],
+  gemini: [
+    "[data-test-id='response-content']",
+    "[data-test-id='conversation-container']",
+    "[data-test-id='chat-history']",
+    "main .response",
+    "main article"
+  ],
+  copilot: [
+    "#b_sydConvCont",
+    "cib-serp",
+    "[data-testid='chat-messages']",
+    "[role='main'] article"
+  ],
+  perplexity: [
+    "[data-testid='answer']",
+    "[data-testid*='answer']",
+    "[role='main'] .prose",
+    "main .prose"
+  ],
+  poe: [
+    "[data-testid='chat-message']",
+    "[data-testid*='assistant-message']",
+    "main article"
+  ],
+  "character.ai": [
+    "[data-testid='chat-message']",
+    "[data-testid*='message']",
+    "main article"
+  ],
+  pi: [
+    "[role='main'] .markdown",
+    "main .markdown",
+    "main article"
+  ],
+  notion: [
+    "[data-testid='chat-message']",
+    "[data-testid*='message']",
+    "[role='main'] .markdown",
+    "main .markdown"
+  ]
+};
+const CLAUDE_COUNTER_REQUEST_TYPE = "CLAUDE_TOKEN_COUNTER_GET_STATS";
+const CLAUDE_COUNTER_MESSAGE_ACTION_GROUP_SELECTOR = '[role="group"][aria-label*="Message actions" i]';
+const CLAUDE_COUNTER_ACTION_COPY_BUTTON_SELECTOR = 'button[data-testid="action-bar-copy"]';
+const CLAUDE_COUNTER_POSITIVE_FEEDBACK_SELECTOR = 'button[aria-label="Give positive feedback"], button[aria-label*="positive feedback" i]';
+const CLAUDE_COUNTER_USER_SELECTORS = [
+  '[data-testid="user-message"]',
+  '[data-testid*="user-message"]',
+  '[data-testid*="human-message"]',
+  '[class*="user-message"]'
+];
+const CLAUDE_COUNTER_ASSISTANT_SELECTORS = [
+  '[data-testid="assistant-message"]',
+  '[data-testid*="assistant-message"]',
+  '[data-testid*="claude-message"]',
+  '[class*="assistant-message"]',
+  '[class*="claude-message"]'
+];
+const CLAUDE_COUNTER_GENERIC_MESSAGE_SELECTORS = [
+  '[data-testid*="message"]',
+  'article[data-testid*="message"]'
+];
+const CLAUDE_COUNTER_DRAFT_INPUT_SELECTORS = [
+  'div[contenteditable="true"][role="textbox"]',
+  'div[contenteditable="true"][aria-label*="message" i]',
+  'textarea[aria-label*="message" i]',
+  "textarea"
+];
 const USER_INPUT_SELECTORS = [
   "textarea",
   "input",
@@ -168,10 +269,15 @@ const USER_INPUT_SELECTORS = [
   ".prompt-editor",
   "form"
 ];
-const IMPACT_CONSTANTS = {
-  energyWhPerToken: 0.00083, // 0.00083 Wh/token
-  co2gPerToken: 0.00043, // 0.43 mg/token converted to g/token
-  waterMlPerToken: 0.01 // 0.01 ml/token
+const IMPACT_EQUATION_CONSTANTS = {
+  energyWhPerInputToken: 0.000083,
+  energyWhPerOutputToken: 0.00083,
+  waterMlPerInputToken: 0.001,
+  waterMlPerOutputToken: 0.01,
+  co2MgPerInputToken: 0.043,
+  co2MgPerOutputToken: 0.43,
+  thinkingScalarEnabled: 2.1,
+  thinkingScalarDisabled: 1
 };
 let latestDetection = null;
 let latestModelDetection = {
@@ -180,6 +286,8 @@ let latestModelDetection = {
   confidence: 0
 };
 let latestTokenEstimate = 0;
+let latestOutputTokenEstimate = 0;
+let accumulatedOutputTokens = 0;
 let mutationObserver = null;
 let awaitingResponse = false;
 let conversationStarted = false;
@@ -193,12 +301,15 @@ let interactionNumberPromise = null;
 let interactionCounter = 0;
 let lastOutputFingerprint = "";
 let latestImpactMetrics = { energyWh: 0, co2g: 0, waterL: 0 };
+let accumulatedImpactTotals = { energyWh: 0, co2g: 0, waterL: 0 };
 let extensionEnabled = true;
 let detectionScheduled = false;
 let resourceObserver = null;
 let pendingNetworkResponse = false;
 let latestInputTokenEstimate = 0;
 let latestDraftInputTokenEstimate = 0;
+let latestSubmittedInputTokenEstimate = 0;
+let accumulatedInputTokens = 0;
 let latestPromptInputText = "";
 let latestImpactPrompt = "";
 let latestAiOutputText = "";
@@ -208,21 +319,6 @@ const ALL_TIME_TOKEN_TOTAL_KEY = "allTimeTokenTotal";
 const ALL_TIME_TOTALS_KEY = "allTimeTotals";
 const CONVERSATION_SESSION_MAP_KEY = "conversationSessionMap";
 const PARTICIPANT_ID_KEY = "participantId";
-const METRICS_AUTO_UNLOCK_AT_LOCAL_MS = new Date(2026, 1, 20, 14, 17, 0, 0).getTime();
-const formatUnlockLabel = (timestampMs) => {
-  const date = new Date(timestampMs);
-  const datePart = date.toLocaleDateString(undefined, {
-    month: "long",
-    day: "numeric",
-    year: "numeric"
-  });
-  const timePart = date.toLocaleTimeString(undefined, {
-    hour: "numeric",
-    minute: "2-digit"
-  });
-  return `${datePart} at ${timePart}`;
-};
-const METRICS_UNLOCK_LABEL = formatUnlockLabel(METRICS_AUTO_UNLOCK_AT_LOCAL_MS);
 const DAILY_TOTALS_RETENTION_DAYS = 60;
 const IMPACT_PROMPT_STATE_KEY = "impactPromptState";
 const IMPACT_PROMPT_VERSION = 2;
@@ -259,6 +355,7 @@ let impactPromptCache = {
 let pendingInteractionLogTimers = new Map();
 let sentInteractionIds = new Set();
 let interactionPromptSubmittedAtById = new Map();
+let interactionOutputTokenBaselineById = new Map();
 let lastLoggedOutputTokensBySession = new Map();
 let lastOutputUpdateAt = 0;
 let lastPromptSubmittedAt = 0;
@@ -287,64 +384,65 @@ const IMPACT_PROMPT_LIBRARY = {
       ]
     },
     {
-      threshold: 0.2,
+      threshold: 0.3,
       prompts: [
-        "sending a few dozen emails",
-        "a short period of smartphone standby"
+        "Sending an SMS text message",
+        "Sending a few dozen emails"
       ]
     },
     {
       threshold: 0.5,
       prompts: [
-        "lighting a single LED for 30 minutes"
+        "lighting an LED bulb for 4 minutes",
+        "Playing a 5 minute video on a mobile phone"
       ]
     },
     {
       threshold: 1,
       prompts: [
-        "playing music on wireless earbuds for 1–2 hours",
-        "powering a wifi wouter for 10 minutes"
+        "Running a wifi router for 10 minutes",
+        "a 1 minute phone call"
       ]
     },
     {
       threshold: 5,
       prompts: [
-        "lighting an LED bulb for 1-2 hours",
-        "about one full smartphone charge"
+        "lighting an LED bulb for 40 minutes",
+        "running an extractor fan for 40 minutes",
       ]
     },
     {
       threshold: 20,
       prompts: [
         "laptop use for 1-2 hours",
-        "boiling one cup of water"
+        "1 full smart phone charge "
       ]
     },
     {
       threshold: 100,
       prompts: [
         "a Wi-Fi router for about a day",
-        "watching TV for about 2 hours"
+        "watching TV for about 1 hour"
       ]
     },
     {
       threshold: 250,
       prompts: [
-        "powering a Wi-Fi router for 2 days",
-        "typical single washing-machine cycle"
+        "powering an iron for 10 minutes",
+        "12 full smart phone charges"
       ]
     },
     {
       threshold: 500,
       prompts: [
-        "running a desktop computer for a day",
-        "cooking a meal on an electric hob (single ring, briefly)"
+        "25 full smart phone charges",
+        "Using an electric hob for 20 minutes"
       ]
     },
     {
       threshold: 1000,
       prompts: [
-        "using an electric heater for ~1 hour",
+        "using an electric heater for ~40 minutes",
         "average daily fridge power consumption"
       ]
     }
@@ -355,48 +453,50 @@ co2g: [
   {
     threshold: 1,
     prompts: [
-      "a candle burning for a couple of minutes",
-      "a few seconds of breathing"
+      "a candle burning for ~3 minutes",
+      "2-3 minutes of breathing"
     ]
   },
   {
     threshold: 5,
     prompts: [
       "a candle burning for 20 minutes",
+      "Driving a car 40 meters"
     ]
   },
   {
     threshold: 50,
     prompts: [
-      "streaming video for about an hour",
-      "smoking 3–4 cigarettes"
+      "Streaming HD videos for an hour",
+      "smoking 4 cigarettes"
     ]
   },
   {
     threshold: 250,
     prompts: [
-      "a short 15-minute car journey",
-      "a one-way bus trip across town"
+      "Driving a car 1 mile",
+      "≈CO₂ as producing one average chicken burger"
     ]
   },
   {
     threshold: 500,
     prompts: [
-      "driving about 3 km by car",
-      "a return bus journey across town"
+      "Driving a car 2 miles",
+      "An average lattes equivalent C0₂"
     ]
   },
   {
     threshold: 750,
     prompts: [
-      "a cheeseburger's production footprint"
+      "24 hours of working on a computer",
+      "C0₂ emissions from producing a loaf of bread"
     ]
   },
   {
     threshold: 1000,
     prompts: [
-      "driving ~6 km by car",
-      "about 4.8 kWh of UK grid electricity"
+      "driving 5 miles by car",
+      "≈CO₂ as producing one average cheeseburger"
     ]
   }
 ],
@@ -406,77 +506,68 @@ waterMl: [
     {
       threshold: 0.1,
       prompts: [
-        "a few drops of water",
-        "less than a quarter teaspoon"
+        "a few drops of water"
       ]
     },
     {
       threshold: 1,
       prompts: [
-        "about a fifth of a teaspoon",
-        "a small drop"
+        "one-fifth of a teaspoon"
       ]
     },
     {
       threshold: 5,
       prompts: [
-        "about one teaspoon of water",
+        "one teaspoon"
       ]
     },
     {
       threshold: 15,
       prompts: [
-        "about one tablespoon of water",
-        "a small spoonful"
+        "one tablespoon"
       ]
     },
     {
       threshold: 50,
       prompts: [
-        "a shot glass of water",
-        "a small espresso cup"
+        "small espresso cup"
       ]
     },
     {
       threshold: 250,
       prompts: [
-        "a standard drinking glass",
-        "a small carton of juice"
+        "standard drinking glass"
       ]
     },
     {
       threshold: 500,
       prompts: [
-        "a standard water bottle",
-        "two large glasses of water"
+        "standard water bottle"
       ]
     },
     {
       threshold: 1000,
       prompts: [
-        "a large 1-litre bottle",
-        "about four glasses of water"
+        "1-litre bottle"
       ]
     },
     {
       threshold: 8000,
       prompts: [
-        "a single toilet flush",
-        "a large bucket of water"
+        "1 toilet flush"
       ]
     },
     {
       threshold: 50000,
       prompts: [
-        "a short shower",
-        "about 50 washing-up bowls"
+        "5 minute shower",
+        "1 washing machine cycle equivalent of water"
       ]
     },
     {
       threshold: 150000,
       prompts: [
-        "a full bath",
-        "roughly 600 glasses of water"
+        "1 full bath of water"
       ]
     }
   ]
@@ -507,33 +598,93 @@ const matchesSelectorList = (node, selectors) => {
 const isUserInputElement = (node) => matchesSelectorList(node, USER_INPUT_SELECTORS);
 const USER_INPUT_TEXT_SELECTORS = USER_INPUT_SELECTORS.filter((selector) => selector !== "form");
 
-const createImpactMetrics = (tokenCount = 0) => {
-  const safeTokens = Number.isFinite(tokenCount) && tokenCount > 0 ? tokenCount : 0;
+const isThinkingModeEnabled = (modelDetection = latestModelDetection) => {
+  const provider = String(modelDetection?.provider || "").toLowerCase();
+  const model = String(modelDetection?.model || "").toLowerCase();
+
+  return (
+    (provider === "chatgpt" && model === "thinking")
+    || (provider === "gemini" && model === "thinking")
+    || (provider === "copilot" && model === "think deeper")
+    || (provider === "claude" && model === "opus")
+  );
+};
+
+const getThinkingScalar = (modelDetection = latestModelDetection) => {
+  return isThinkingModeEnabled(modelDetection)
+    ? IMPACT_EQUATION_CONSTANTS.thinkingScalarEnabled
+    : IMPACT_EQUATION_CONSTANTS.thinkingScalarDisabled;
+};
+
+const createImpactMetrics = (
+  inputTokenCount = 0,
+  outputTokenCount = 0,
+  modelDetection = latestModelDetection
+) => {
+  const safeInputTokens = Number.isFinite(inputTokenCount) && inputTokenCount > 0
+    ? Number(inputTokenCount)
+    : 0;
+  const safeOutputTokens = Number.isFinite(outputTokenCount) && outputTokenCount > 0
+    ? Number(outputTokenCount)
+    : 0;
+  const thinkingScalar = getThinkingScalar(modelDetection);
+
+  const energyWh = (
+    safeInputTokens * IMPACT_EQUATION_CONSTANTS.energyWhPerInputToken
+  ) + (
+    safeOutputTokens * IMPACT_EQUATION_CONSTANTS.energyWhPerOutputToken * thinkingScalar
+  );
+  const waterMl = (
+    safeInputTokens * IMPACT_EQUATION_CONSTANTS.waterMlPerInputToken
+  ) + (
+    safeOutputTokens * IMPACT_EQUATION_CONSTANTS.waterMlPerOutputToken * thinkingScalar
+  );
+  const co2Mg = (
+    safeInputTokens * IMPACT_EQUATION_CONSTANTS.co2MgPerInputToken
+  ) + (
+    safeOutputTokens * IMPACT_EQUATION_CONSTANTS.co2MgPerOutputToken * thinkingScalar
+  );
+
   return {
-    energyWh: +(safeTokens * IMPACT_CONSTANTS.energyWhPerToken).toFixed(6),
-    co2g: +(safeTokens * IMPACT_CONSTANTS.co2gPerToken).toFixed(6),
-    waterL: +((safeTokens * IMPACT_CONSTANTS.waterMlPerToken) / 1000).toFixed(6)
+    energyWh: +energyWh.toFixed(6),
+    co2g: +(co2Mg / 1000).toFixed(6),
+    waterL: +(waterMl / 1000).toFixed(6)
   };
 };
 
-const resetImpactMetrics = () => {
-  latestImpactMetrics = createImpactMetrics(0);
+const addImpactMetrics = (baseMetrics, deltaMetrics) => ({
+  energyWh: +((Number(baseMetrics?.energyWh) || 0) + (Number(deltaMetrics?.energyWh) || 0)).toFixed(6),
+  co2g: +((Number(baseMetrics?.co2g) || 0) + (Number(deltaMetrics?.co2g) || 0)).toFixed(6),
+  waterL: +((Number(baseMetrics?.waterL) || 0) + (Number(deltaMetrics?.waterL) || 0)).toFixed(6)
+});
+
+const refreshDisplayedTotals = (modelDetection = latestModelDetection) => {
+  const safeOutputTokens = Number.isFinite(latestOutputTokenEstimate) && latestOutputTokenEstimate > 0
+    ? Math.round(latestOutputTokenEstimate)
+    : 0;
+  latestTokenEstimate = safeOutputTokens;
+  const inputTokensForImpact = Math.max(
+    Number(latestSubmittedInputTokenEstimate) || 0,
+    Number(accumulatedInputTokens) || 0
+  );
+  const safeInputTokens = Number.isFinite(inputTokensForImpact) && inputTokensForImpact > 0
+    ? Math.round(inputTokensForImpact)
+    : 0;
+  latestImpactMetrics = createImpactMetrics(safeInputTokens, safeOutputTokens, modelDetection);
+};
+
+const resetAccumulatedTotals = () => {
+  accumulatedOutputTokens = 0;
+  accumulatedInputTokens = 0;
+  accumulatedImpactTotals = { energyWh: 0, co2g: 0, waterL: 0 };
+  latestTokenEstimate = 0;
+  latestOutputTokenEstimate = 0;
+  latestImpactMetrics = { energyWh: 0, co2g: 0, waterL: 0 };
 };
 
 const formatImpactValue = (value) => {
-  if (!Number.isFinite(value) || value <= 0) {
-    return "0";
-  }
-  if (value >= 10) {
-    return value.toFixed(1);
-  }
-  if (value >= 1) {
-    return value.toFixed(2);
-  }
-  if (value >= 0.01) {
-    return value.toFixed(3);
-  }
-  return value.toFixed(6).replace(/\.?0+$/, "");
+  const safeValue = Number.isFinite(value) && value > 0 ? value : 0;
+  return safeValue.toFixed(2);
 };
 
 const formatWaterMl = (valueInLiters) => {
@@ -599,14 +750,35 @@ const collectInputCandidates = (sourceNode = null) => {
   return candidates;
 };
 
+const isLikelyClaudePage = () => {
+  const host = (location.hostname || "").toLowerCase();
+  const url = (location.href || "").toLowerCase();
+  return host.includes("claude.ai")
+    || host.includes("anthropic.com")
+    || url.includes("claude.ai")
+    || url.includes("anthropic.com");
+};
+
 const captureInputSnapshot = (sourceNode = null) => {
+  const useClaudeEstimator = isLikelyClaudePage();
   const candidates = collectInputCandidates(sourceNode);
   for (const node of candidates) {
     const text = readInputText(node);
     if (text) {
-      return { text, tokens: estimateTokensFromText(text) };
+      return {
+        text,
+        tokens: useClaudeEstimator ? estimateClaudeCounterTokens(text) : estimateTokensFromText(text)
+      };
     }
   }
+
+  if (useClaudeEstimator) {
+    const draftPrompt = findClaudeCounterDraftPromptText();
+    if (draftPrompt) {
+      return { text: draftPrompt, tokens: estimateClaudeCounterTokens(draftPrompt) };
+    }
+  }
+
   return { text: "", tokens: 0 };
 };
 
@@ -741,7 +913,7 @@ const ensureBanner = () => {
     banner.style.right = "24px";
     banner.style.bottom = "36px";
     banner.style.zIndex = "2147483647";
-    banner.style.padding = "16px 18px";
+    banner.style.padding = "20px 22px";
     banner.style.borderRadius = "14px";
     banner.style.background = "linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(30, 64, 175, 0.92))";
     banner.style.border = "1px solid rgba(148, 163, 184, 0.4)";
@@ -756,7 +928,8 @@ const ensureBanner = () => {
     banner.style.boxShadow = "0 12px 30px rgba(15, 23, 42, 0.45)";
     banner.style.pointerEvents = "auto";
     banner.style.backdropFilter = "blur(6px)";
-    banner.style.width = "min(300px, calc(100vw - 48px))";
+    banner.style.width = "min(420px, calc(100vw - 32px))";
+    banner.style.minHeight = "220px";
     banner.style.boxSizing = "border-box";
     banner.style.whiteSpace = "pre-line";
     document.documentElement.appendChild(banner);
@@ -795,6 +968,23 @@ const hideBanner = () => {
   if (banner) {
     banner.style.display = "none";
   }
+};
+
+const applyParticipantBannerGateStyles = (banner, hasParticipantId) => {
+  if (!banner) {
+    return;
+  }
+  if (hasParticipantId) {
+    banner.style.background = "linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(30, 64, 175, 0.92))";
+    banner.style.border = "1px solid rgba(148, 163, 184, 0.4)";
+    banner.style.opacity = "1";
+    banner.style.filter = "none";
+    return;
+  }
+  banner.style.background = "linear-gradient(135deg, rgba(71, 85, 105, 0.92), rgba(100, 116, 139, 0.92))";
+  banner.style.border = "1px solid rgba(148, 163, 184, 0.55)";
+  banner.style.opacity = "0.82";
+  banner.style.filter = "grayscale(0.6)";
 };
 
 const ensureQuickFollowupNudge = () => {
@@ -924,19 +1114,27 @@ const trackNewChatStartAndMaybeNudge = () => {
   });
 };
 
-const isMetricsAutoUnlocked = (date = new Date()) => date.getTime() >= METRICS_AUTO_UNLOCK_AT_LOCAL_MS;
-
 const refreshEnvironmentalMetricsVisibility = () => {
-  environmentalMetricsVisible = isMetricsAutoUnlocked();
+  environmentalMetricsVisible = true;
   return environmentalMetricsVisible;
 };
 
 const renderBannerText = (label, tokenCount, impactMetrics, promptText = "", modelDetection = null) => {
   showBanner();
   const banner = ensureBanner();
+  const hasParticipantId = Boolean(String(userId || "").trim());
+  applyParticipantBannerGateStyles(banner, hasParticipantId);
   const detectedLabel = label ? `AI detected: ${label}` : "AI detected: None";
   const tokenLabel = `Tokens: ${tokenCount ?? 0}`;
-  const metrics = impactMetrics || createImpactMetrics(tokenCount);
+  const inputTokensForImpact = Math.max(
+    Number(latestSubmittedInputTokenEstimate) || 0,
+    Number(accumulatedInputTokens) || 0
+  );
+  const metrics = impactMetrics || createImpactMetrics(
+    inputTokensForImpact,
+    tokenCount,
+    modelDetection || latestModelDetection
+  );
   const showEnvironmentalMetrics = refreshEnvironmentalMetricsVisibility();
   const metricItems = [];
   if (showEnvironmentalMetrics) {
@@ -946,8 +1144,6 @@ const renderBannerText = (label, tokenCount, impactMetrics, promptText = "", mod
       `CO2 produced: ${formatImpactValue(metrics.co2g)} g`,
       `Water consumed: ${formatWaterMl(metrics.waterL)} ml`
     );
-  } else {
-    metricItems.push(`Environmental metrics are hidden until ${METRICS_UNLOCK_LABEL}.`);
   }
 
   banner.replaceChildren();
@@ -983,6 +1179,17 @@ const renderBannerText = (label, tokenCount, impactMetrics, promptText = "", mod
     metricsGroup.appendChild(lineEl);
   });
 
+  if (!hasParticipantId) {
+    const gateLine = document.createElement("div");
+    gateLine.textContent = "Please save unique user ID to continue";
+    gateLine.style.marginTop = "8px";
+    gateLine.style.paddingTop = "7px";
+    gateLine.style.borderTop = "1px dashed rgba(148, 163, 184, 0.45)";
+    gateLine.style.color = "#e2e8f0";
+    gateLine.style.fontSize = "12px";
+    banner.appendChild(gateLine);
+  }
+
   if (showEnvironmentalMetrics && promptText) {
     const equivalentBox = document.createElement("div");
     equivalentBox.textContent = `Equivalent: ${promptText}`;
@@ -1006,6 +1213,54 @@ const resolveImpactPrompt = (impactMetrics, callback) => {
     callback(latestImpactPrompt);
     return;
   }
+
+  const hasRuntimeLastError = () => {
+    try {
+      return Boolean(chrome?.runtime?.lastError);
+    } catch (_error) {
+      return true;
+    }
+  };
+
+  const safeStorageGet = (query, onSuccess, onFailure) => {
+    try {
+      chrome.storage.local.get(query, (data) => {
+        if (hasRuntimeLastError()) {
+          if (typeof onFailure === "function") {
+            onFailure();
+          }
+          return;
+        }
+        if (typeof onSuccess === "function") {
+          onSuccess(data);
+        }
+      });
+    } catch (_error) {
+      if (typeof onFailure === "function") {
+        onFailure();
+      }
+    }
+  };
+
+  const safeStorageSet = (items, onDone, onFailure) => {
+    try {
+      chrome.storage.local.set(items, () => {
+        if (hasRuntimeLastError()) {
+          if (typeof onFailure === "function") {
+            onFailure();
+          }
+          return;
+        }
+        if (typeof onDone === "function") {
+          onDone();
+        }
+      });
+    } catch (_error) {
+      if (typeof onFailure === "function") {
+        onFailure();
+      }
+    }
+  };
 
   const todayKey = getIsoLocalDate();
   const fallbackState = {
@@ -1070,7 +1325,11 @@ const resolveImpactPrompt = (impactMetrics, callback) => {
           todayTotals,
           state: nextState
         };
-        chrome.storage.local.set({ [IMPACT_PROMPT_STATE_KEY]: nextState }, () => callback(selected));
+        safeStorageSet(
+          { [IMPACT_PROMPT_STATE_KEY]: nextState },
+          () => callback(selected),
+          () => callback(selected)
+        );
         return;
       }
     }
@@ -1084,33 +1343,45 @@ const resolveImpactPrompt = (impactMetrics, callback) => {
     return;
   }
 
-  chrome.storage.local.get({ [DAILY_TOTALS_KEY]: {}, [IMPACT_PROMPT_STATE_KEY]: fallbackState }, (data) => {
-    const totals = data?.[DAILY_TOTALS_KEY] && typeof data[DAILY_TOTALS_KEY] === "object"
-      ? data[DAILY_TOTALS_KEY]
-      : {};
-    const todayTotals = totals?.[todayKey] && typeof totals[todayKey] === "object" ? totals[todayKey] : {};
-    const storedStateRaw = data?.[IMPACT_PROMPT_STATE_KEY] && typeof data[IMPACT_PROMPT_STATE_KEY] === "object"
-      ? data[IMPACT_PROMPT_STATE_KEY]
-      : fallbackState;
-    const state = storedStateRaw.dayKey === todayKey && Number(storedStateRaw.version) === IMPACT_PROMPT_VERSION
-      ? {
-          version: IMPACT_PROMPT_VERSION,
-          dayKey: todayKey,
-          energyWh: Number(storedStateRaw.energyWh) || 0,
-          co2g: Number(storedStateRaw.co2g) || 0,
-          waterL: Number(storedStateRaw.waterL) || 0,
-          lastPrompt: typeof storedStateRaw.lastPrompt === "string" ? storedStateRaw.lastPrompt : ""
-        }
-      : { ...fallbackState };
-    continueWithContext(todayTotals, state);
-  });
+  safeStorageGet(
+    { [DAILY_TOTALS_KEY]: {}, [IMPACT_PROMPT_STATE_KEY]: fallbackState },
+    (data) => {
+      const totals = data?.[DAILY_TOTALS_KEY] && typeof data[DAILY_TOTALS_KEY] === "object"
+        ? data[DAILY_TOTALS_KEY]
+        : {};
+      const todayTotals = totals?.[todayKey] && typeof totals[todayKey] === "object" ? totals[todayKey] : {};
+      const storedStateRaw = data?.[IMPACT_PROMPT_STATE_KEY] && typeof data[IMPACT_PROMPT_STATE_KEY] === "object"
+        ? data[IMPACT_PROMPT_STATE_KEY]
+        : fallbackState;
+      const state = storedStateRaw.dayKey === todayKey && Number(storedStateRaw.version) === IMPACT_PROMPT_VERSION
+        ? {
+            version: IMPACT_PROMPT_VERSION,
+            dayKey: todayKey,
+            energyWh: Number(storedStateRaw.energyWh) || 0,
+            co2g: Number(storedStateRaw.co2g) || 0,
+            waterL: Number(storedStateRaw.waterL) || 0,
+            lastPrompt: typeof storedStateRaw.lastPrompt === "string" ? storedStateRaw.lastPrompt : ""
+          }
+        : { ...fallbackState };
+      continueWithContext(todayTotals, state);
+    },
+    () => callback(latestImpactPrompt)
+  );
 };
 
-const updateBanner = (label, tokenCount, impactMetrics) => {
-  const metrics = impactMetrics || createImpactMetrics(tokenCount);
+const updateBanner = (label, tokenCount, impactMetrics, outputTokenCountRaw = latestOutputTokenEstimate) => {
+  const modelDetection = latestModelDetection;
+  const inputTokensForImpact = Math.max(
+    Number(latestSubmittedInputTokenEstimate) || 0,
+    Number(accumulatedInputTokens) || 0
+  );
+  const metrics = impactMetrics || createImpactMetrics(
+    inputTokensForImpact,
+    tokenCount,
+    modelDetection
+  );
   const detectedLabel = label ? `AI detected: ${label}` : "AI detected: None";
   const tokenLabel = `Tokens: ${tokenCount ?? 0}`;
-  const modelDetection = latestModelDetection;
 
   renderBannerText(label, tokenCount, metrics, latestImpactPrompt, modelDetection);
   resolveImpactPrompt(metrics, (promptText) => {
@@ -1126,7 +1397,8 @@ const updateBanner = (label, tokenCount, impactMetrics) => {
     scheduleInteractionLog({
       metrics: metrics,
       tokenCount: tokenCount,
-      inputTokenCount: latestInputTokenEstimate,
+      outputTokenCountRaw: outputTokenCountRaw,
+      inputTokenCount: latestSubmittedInputTokenEstimate || latestInputTokenEstimate || 0,
       userText: latestPromptInputText,
       aiOutputText: latestAiOutputText,
       tokenLabel: tokenLabel,
@@ -1315,26 +1587,49 @@ const logSessionData = async (data) => {
   const inputTokens = Number.isFinite(data?.inputTokenCount)
     ? Number(data.inputTokenCount)
     : 0;
-  const outputTokens = Number(data?.tokenCount) || 0;
+  const outputTokens = Number(
+    data?.outputTokenCountRaw != null ? data.outputTokenCountRaw : data?.tokenCount
+  ) || 0;
+  const interactionKey = data?.interactionId || interactionId;
+  const interactionBaselineTokens = Number(interactionOutputTokenBaselineById.get(interactionKey));
   const previousOutputTokens = Number(lastLoggedOutputTokensBySession.get(resolvedSessionId)) || 0;
+  const baselineTokens = Number.isFinite(interactionBaselineTokens) && interactionBaselineTokens >= 0
+    ? interactionBaselineTokens
+    : previousOutputTokens;
+  const outputTokensDelta = Math.max(0, outputTokens - baselineTokens);
   lastLoggedOutputTokensBySession.set(resolvedSessionId, outputTokens);
-  const tokenRatioOutIn = inputTokens > 0 ? +(outputTokens / inputTokens).toFixed(6) : null;
+  const modelProvider = data?.modelProvider || latestModelDetection?.provider || "unknown";
+  const modelName = data?.modelName || latestModelDetection?.model || "unknown";
+  const impactDelta = createImpactMetrics(inputTokens, outputTokensDelta, {
+    provider: modelProvider,
+    model: modelName,
+    confidence: Number(latestModelDetection?.confidence) || 0
+  });
+  accumulatedOutputTokens = +((Number(accumulatedOutputTokens) || 0) + outputTokensDelta).toFixed(6);
+  accumulatedImpactTotals = addImpactMetrics(accumulatedImpactTotals, impactDelta);
+  const tokenRatioOutIn = inputTokens > 0 ? +(outputTokensDelta / inputTokens).toFixed(6) : null;
   const promptTopicAnalysis = detectTopicFromText(data?.userText || latestPromptInputText || "");
   const responseTopicAnalysis = detectTopicFromText(data?.aiOutputText || latestAiOutputText || "");
   const combinedTopicAnalysis = detectCombinedTopic(promptTopicAnalysis, responseTopicAnalysis);
-  const energyWh = Number(data?.metrics?.energyWh) || 0;
-  const co2g = Number(data?.metrics?.co2g) || 0;
-  const waterMl = +((Number(data?.metrics?.waterL) || 0) * 1000).toFixed(6);
-  const modelProvider = data?.modelProvider || latestModelDetection?.provider || "unknown";
-  const modelName = data?.modelName || latestModelDetection?.model || "unknown";
+  const energyWh = Number(impactDelta?.energyWh) || 0;
+  const co2g = Number(impactDelta?.co2g) || 0;
+  const waterMl = +((Number(impactDelta?.waterL) || 0) * 1000).toFixed(6);
   const promptSubmittedAtIso = typeof data?.promptSubmittedAt === "string" && data.promptSubmittedAt.trim()
     ? data.promptSubmittedAt.trim()
+    : null;
+  const responseCompletedAtIso = typeof data?.responseCompletedAt === "string" && data.responseCompletedAt.trim()
+    ? data.responseCompletedAt.trim()
     : null;
   const nowMs = Date.now();
   const sentAtIso = new Date(nowMs).toISOString();
   const promptSubmittedAtMs = promptSubmittedAtIso ? Date.parse(promptSubmittedAtIso) : NaN;
+  const responseCompletedAtMs = responseCompletedAtIso ? Date.parse(responseCompletedAtIso) : NaN;
+  const fallbackMeasuredAtMs = Math.max(0, nowMs - INTERACTION_LOG_DEBOUNCE_MS);
+  const thinkingMeasuredAtMs = Number.isFinite(responseCompletedAtMs) && responseCompletedAtMs > 0
+    ? responseCompletedAtMs
+    : fallbackMeasuredAtMs;
   const thinkingTimeSec = Number.isFinite(promptSubmittedAtMs)
-    ? +Math.max(0, (nowMs - promptSubmittedAtMs) / 1000).toFixed(3)
+    ? +Math.max(0, (thinkingMeasuredAtMs - promptSubmittedAtMs) / 1000).toFixed(3)
     : null;
   const {
     userText: _ignoredUserText,
@@ -1360,11 +1655,9 @@ const logSessionData = async (data) => {
     sentAt: sentAtIso,
     promptSubmittedAt: promptSubmittedAtIso,
     thinkingTimeSec: thinkingTimeSec,
-    tokenCountIn: inputTokens,
-    tokenCountOut: outputTokens,
     tokenRatioOutIn: tokenRatioOutIn,
     tokensIn: inputTokens,
-    tokensOut: outputTokens,
+    tokensOut: outputTokensDelta,
     dailyTokenGoal: dailyTokenGoal,
     water_ml: waterMl,
     water_L: waterMl,
@@ -1375,11 +1668,11 @@ const logSessionData = async (data) => {
   };
   addUsageToDailyTotals({
     tokensIn: inputTokens,
-    tokensOut: outputTokens,
-    tokensTotal: outputTokens + inputTokens,
-    wh: Number(data?.metrics?.energyWh) || 0,
-    co2_g: Number(data?.metrics?.co2g) || 0,
-    water_L: Number(data?.metrics?.waterL) || 0,
+    tokensOut: outputTokensDelta,
+    tokensTotal: outputTokensDelta + inputTokens,
+    wh: Number(impactDelta?.energyWh) || 0,
+    co2_g: Number(impactDelta?.co2g) || 0,
+    water_L: Number(impactDelta?.waterL) || 0,
     modelName: modelName,
     interactions: 1
   });
@@ -1434,8 +1727,13 @@ const scheduleInteractionLog = (data) => {
           sentInteractionIds.delete(first.value);
         }
       }
-      logSessionData(data);
+      const settledOutputAtMs = Number(lastOutputUpdateAt) || 0;
+      logSessionData({
+        ...data,
+        responseCompletedAt: settledOutputAtMs > 0 ? new Date(settledOutputAtMs).toISOString() : null
+      });
       interactionPromptSubmittedAtById.delete(interactionKey);
+      interactionOutputTokenBaselineById.delete(interactionKey);
     }, INTERACTION_LOG_DEBOUNCE_MS);
 
     pendingInteractionLogTimers.set(interactionKey, timer);
@@ -1454,11 +1752,14 @@ const resetConversationState = () => {
   lastOutputFingerprint = "";
   lastOutputUpdateAt = 0;
   latestTokenEstimate = 0;
+  latestOutputTokenEstimate = 0;
   latestInputTokenEstimate = 0;
   latestDraftInputTokenEstimate = 0;
+  latestSubmittedInputTokenEstimate = 0;
+  accumulatedInputTokens = 0;
   latestPromptInputText = "";
   latestAiOutputText = "";
-  resetImpactMetrics();
+  resetAccumulatedTotals();
   latestDetection = null;
   latestModelDetection = { provider: "unknown", model: "unknown", confidence: 0 };
   pendingNetworkResponse = false;
@@ -1467,6 +1768,7 @@ const resetConversationState = () => {
   quickFollowupCountInSession = 0;
   quickFollowupNextAlertCount = QUICK_FOLLOWUP_ALERT_THRESHOLD + 1;
   lastLoggedOutputTokensBySession.clear();
+  interactionOutputTokenBaselineById.clear();
   interactionPromptSubmittedAtById.clear();
   latestQuickFollowupMeta = {
     isQuickFollowup: false,
@@ -1519,6 +1821,7 @@ const registerStorageListeners = () => {
       const nextParticipantId = String(changes[PARTICIPANT_ID_KEY].newValue ?? "").trim();
       userId = nextParticipantId || null;
       userIdPromise = null;
+      queueDetection();
     }
   });
 };
@@ -1561,6 +1864,29 @@ const extractNodeText = (node) => {
   return "";
 };
 
+const normalizeUiLabel = (value, maxLength = 80) => {
+  const normalized = typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+  if (!normalized) {
+    return "";
+  }
+  return normalized.length <= maxLength ? normalized : "";
+};
+
+const isVisibleElement = (node) => {
+  if (!(node instanceof Element)) {
+    return false;
+  }
+  const rects = typeof node.getClientRects === "function" ? node.getClientRects() : [];
+  if (!rects || rects.length === 0) {
+    return false;
+  }
+  const style = window.getComputedStyle(node);
+  if (!style || style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+    return false;
+  }
+  return true;
+};
+
 const collectModelContextText = () => {
   if (!document.body) {
     return "";
@@ -1583,21 +1909,20 @@ const collectModelContextText = () => {
       if (index >= 8) {
         return;
       }
-      appendSample(node.innerText || "");
+      if (!isVisibleElement(node)) {
+        return;
+      }
+      appendSample(normalizeUiLabel(node.innerText || ""));
       if (typeof node.getAttribute === "function") {
-        appendSample(node.getAttribute("aria-label") || "");
-        appendSample(node.getAttribute("title") || "");
-        appendSample(node.getAttribute("data-testid") || "");
+        appendSample(normalizeUiLabel(node.getAttribute("aria-label") || ""));
+        appendSample(normalizeUiLabel(node.getAttribute("title") || ""));
+        appendSample(normalizeUiLabel(node.getAttribute("data-testid") || ""));
       }
     });
   });
 
   const scopedText = samples.join(" ").slice(0, MODEL_CONTEXT_SLICE_LIMIT);
-  if (scopedText.trim()) {
-    return scopedText;
-  }
-
-  return (document.body.innerText || "").slice(0, TEXT_SLICE_LIMIT);
+  return scopedText.trim();
 };
 
 const detectModelFromPage = (providerLabel) => {
@@ -1659,31 +1984,434 @@ const getDocumentTextWithoutInputs = () => {
   return text;
 };
 
-const collectAiOutputText = () => {
+const nodeMatchesAnySelector = (node, selectors) => {
+  if (!(node instanceof Element) || !Array.isArray(selectors) || selectors.length === 0) {
+    return false;
+  }
+  return selectors.some((selector) => {
+    if (!selector) {
+      return false;
+    }
+    try {
+      return node.matches(selector) || !!node.closest(selector);
+    } catch (_) {
+      return false;
+    }
+  });
+};
+
+const getTopLevelMatchedNodes = (nodeList) => {
+  const nodes = Array.from(nodeList || []).filter((node) => node instanceof Element);
+  if (nodes.length <= 1) {
+    return nodes;
+  }
+  return nodes.filter((node, index) => {
+    return !nodes.some((otherNode, otherIndex) => (
+      otherIndex !== index
+      && otherNode !== node
+      && otherNode.contains(node)
+    ));
+  });
+};
+
+const collectTextFromSelectors = (selectors, options = {}) => {
+  const minWords = Number.isFinite(options?.minWords) ? options.minWords : 0;
+  const excludeSelectors = Array.isArray(options?.excludeSelectors) ? options.excludeSelectors : [];
+  const maxSnippets = Number.isFinite(options?.maxSnippets) && options.maxSnippets > 0
+    ? Math.floor(options.maxSnippets)
+    : null;
+  const seen = new Set();
+
+  for (const selector of selectors) {
+    if (!selector) {
+      continue;
+    }
+    const matches = document.querySelectorAll(selector);
+    if (!matches.length) {
+      continue;
+    }
+
+    const topLevelNodes = getTopLevelMatchedNodes(matches);
+    const snippets = [];
+
+    topLevelNodes.forEach((node) => {
+      if (!node || isSkippableNode(node) || !isVisibleElement(node)) {
+        return;
+      }
+      if (excludeSelectors.length && nodeMatchesAnySelector(node, excludeSelectors)) {
+        return;
+      }
+      const snippet = normalizeText(extractNodeText(node));
+      if (!snippet) {
+        return;
+      }
+      if (minWords > 0 && snippet.split(" ").filter(Boolean).length < minWords) {
+        return;
+      }
+      if (seen.has(snippet)) {
+        return;
+      }
+      seen.add(snippet);
+      snippets.push(snippet);
+    });
+
+    if (snippets.length) {
+      const selectedSnippets = maxSnippets ? snippets.slice(-maxSnippets) : snippets;
+      return selectedSnippets.join("\n");
+    }
+  }
+
+  return "";
+};
+
+const normalizeClaudeCounterText = (value) => {
+  return (value || "")
+    .replace(/\u200B/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+};
+
+const isClaudeCounterVisible = (element) => {
+  if (!(element instanceof Element) || !element.isConnected) {
+    return false;
+  }
+
+  const style = window.getComputedStyle(element);
+  if (!style || style.display === "none" || style.visibility === "hidden") {
+    return false;
+  }
+
+  const rect = element.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+};
+
+const pruneClaudeCounterNestedElements = (elements) => {
+  const unique = Array.from(new Set(elements));
+  return unique.filter((candidate) => {
+    return !unique.some(
+      (other) => other !== candidate && candidate.contains(other)
+    );
+  });
+};
+
+const uniqueClaudeCounterElements = (elements) => {
+  return Array.from(new Set(elements.filter(Boolean)));
+};
+
+const cleanClaudeCounterNodeText = (element) => {
+  if (!(element instanceof Element)) {
+    return "";
+  }
+  const clone = element.cloneNode(true);
+  const unwanted = clone.querySelectorAll(
+    [
+      "button",
+      "nav",
+      "header",
+      "footer",
+      "svg",
+      "img",
+      "input",
+      "textarea",
+      "[role='button']",
+      "[aria-hidden='true']",
+      "[data-testid*='actions']",
+      "[data-testid*='toolbar']",
+      "[data-testid*='footer']"
+    ].join(",")
+  );
+  unwanted.forEach((node) => node.remove());
+  return normalizeClaudeCounterText(clone.innerText || clone.textContent || "");
+};
+
+const getClaudeCounterTopLevelElements = (selectors) => {
+  const collected = [];
+  selectors.forEach((selector) => {
+    if (!selector) {
+      return;
+    }
+    document.querySelectorAll(selector).forEach((element) => {
+      if (isClaudeCounterVisible(element)) {
+        collected.push(element);
+      }
+    });
+  });
+  return pruneClaudeCounterNestedElements(collected);
+};
+
+const getClaudeCounterMessageActionGroups = () => {
+  const directGroups = Array.from(
+    document.querySelectorAll(CLAUDE_COUNTER_MESSAGE_ACTION_GROUP_SELECTOR)
+  );
+  if (directGroups.length > 0) {
+    return uniqueClaudeCounterElements(directGroups);
+  }
+
+  const groupsFromCopyButtons = Array.from(
+    document.querySelectorAll(CLAUDE_COUNTER_ACTION_COPY_BUTTON_SELECTOR)
+  )
+    .map((button) => button.closest('[role="group"]'))
+    .filter(Boolean);
+  return uniqueClaudeCounterElements(groupsFromCopyButtons);
+};
+
+const findClaudeCounterMessageContainerFromActionGroup = (group) => {
+  let node = group;
+  let bestContainer = null;
+
+  for (let depth = 0; depth < 12 && node; depth += 1) {
+    const parent = node.parentElement;
+    if (!parent) {
+      break;
+    }
+
+    const actionGroupsInside = parent.querySelectorAll(
+      CLAUDE_COUNTER_MESSAGE_ACTION_GROUP_SELECTOR
+    ).length;
+    if (actionGroupsInside > 1) {
+      break;
+    }
+
+    const text = cleanClaudeCounterNodeText(parent);
+    if (text) {
+      bestContainer = parent;
+    }
+    node = parent;
+  }
+
+  return bestContainer;
+};
+
+const dedupeClaudeCounterTexts = (texts) => {
+  const seen = new Set();
+  return texts.filter((text) => {
+    const key = normalizeClaudeCounterText(text);
+    if (!key || seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+};
+
+const extractClaudeCounterByActionGroups = (role) => {
+  const groups = getClaudeCounterMessageActionGroups();
+  const texts = [];
+
+  groups.forEach((group) => {
+    const hasPositiveFeedback = Boolean(
+      group.querySelector(CLAUDE_COUNTER_POSITIVE_FEEDBACK_SELECTOR)
+    );
+    const isAssistant = hasPositiveFeedback;
+    const matchesRole =
+      (role === "assistant" && isAssistant) || (role === "user" && !isAssistant);
+
+    if (!matchesRole) {
+      return;
+    }
+
+    const container = findClaudeCounterMessageContainerFromActionGroup(group);
+    if (!container) {
+      return;
+    }
+
+    const text = cleanClaudeCounterNodeText(container);
+    if (!text || text.length < 8) {
+      return;
+    }
+    texts.push(text);
+  });
+
+  return dedupeClaudeCounterTexts(texts);
+};
+
+const getClaudeCounterRoleSignal = (element) => {
+  if (!(element instanceof Element)) {
+    return "";
+  }
+  const testId = (element.getAttribute("data-testid") || "").toLowerCase();
+  const className = typeof element.className === "string"
+    ? element.className.toLowerCase()
+    : "";
+  const ariaLabel = (element.getAttribute("aria-label") || "").toLowerCase();
+  return `${testId} ${className} ${ariaLabel}`;
+};
+
+const claudeCounterLooksLikeUser = (signal) => /(^|\W)(user|human)(\W|$)/.test(signal);
+const claudeCounterLooksLikeAssistant = (signal) => /(^|\W)(assistant|claude|ai)(\W|$)/.test(signal);
+
+const extractClaudeCounterByRole = (role) => {
+  const actionBased = extractClaudeCounterByActionGroups(role);
+  if (actionBased.length > 0) {
+    return actionBased;
+  }
+
+  const explicitSelectors = role === "user"
+    ? CLAUDE_COUNTER_USER_SELECTORS
+    : CLAUDE_COUNTER_ASSISTANT_SELECTORS;
+  const explicit = getClaudeCounterTopLevelElements(explicitSelectors)
+    .map(cleanClaudeCounterNodeText)
+    .filter(Boolean);
+  if (explicit.length > 0) {
+    return dedupeClaudeCounterTexts(explicit);
+  }
+
+  const genericNodes = getClaudeCounterTopLevelElements(CLAUDE_COUNTER_GENERIC_MESSAGE_SELECTORS);
+  const genericTexts = [];
+
+  genericNodes.forEach((node) => {
+    const signal = getClaudeCounterRoleSignal(node);
+    const text = cleanClaudeCounterNodeText(node);
+    if (!text) {
+      return;
+    }
+
+    if (role === "user" && claudeCounterLooksLikeUser(signal) && !claudeCounterLooksLikeAssistant(signal)) {
+      genericTexts.push(text);
+    }
+    if (role === "assistant" && claudeCounterLooksLikeAssistant(signal) && !claudeCounterLooksLikeUser(signal)) {
+      genericTexts.push(text);
+    }
+  });
+
+  if (genericTexts.length > 0) {
+    return dedupeClaudeCounterTexts(genericTexts);
+  }
+
+  const alternatingTexts = genericNodes
+    .map(cleanClaudeCounterNodeText)
+    .filter(Boolean);
+  if (alternatingTexts.length === 0) {
+    return [];
+  }
+
+  const startIndex = role === "user" ? 0 : 1;
+  return dedupeClaudeCounterTexts(
+    alternatingTexts.filter((_, index) => index % 2 === startIndex)
+  );
+};
+
+const estimateClaudeCounterTokens = (text) => {
+  const normalized = normalizeClaudeCounterText(text);
+  if (!normalized) {
+    return 0;
+  }
+
+  const cjkPattern =
+    /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu;
+  const cjkChars = normalized.match(cjkPattern) || [];
+  const withoutCjk = normalized.replace(cjkPattern, " ");
+  const parts =
+    withoutCjk.match(/[A-Za-z0-9]+(?:['\u2019][A-Za-z0-9]+)?|[^\sA-Za-z0-9]/g) || [];
+
+  let tokenCount = cjkChars.length;
+  parts.forEach((part) => {
+    if (/^[A-Za-z0-9]+(?:['\u2019][A-Za-z0-9]+)?$/.test(part)) {
+      tokenCount += Math.max(1, Math.ceil(part.length / 4));
+    } else {
+      tokenCount += 1;
+    }
+  });
+
+  return tokenCount;
+};
+
+const findClaudeCounterDraftPromptText = () => {
+  const candidates = getClaudeCounterTopLevelElements(CLAUDE_COUNTER_DRAFT_INPUT_SELECTORS);
+  let draft = "";
+
+  candidates.forEach((element) => {
+    const value = element instanceof HTMLTextAreaElement
+      ? element.value
+      : element.innerText || element.textContent || "";
+    const normalized = normalizeClaudeCounterText(value);
+    if (normalized.length > draft.length) {
+      draft = normalized;
+    }
+  });
+
+  return draft;
+};
+
+const computeClaudeDomTokenStats = () => {
+  const promptMessages = extractClaudeCounterByRole("user");
+  const outputMessages = extractClaudeCounterByRole("assistant");
+  const draftPrompt = findClaudeCounterDraftPromptText();
+
+  const promptTokens = promptMessages.reduce(
+    (sum, text) => sum + estimateClaudeCounterTokens(text),
+    0
+  );
+  const outputTokens = outputMessages.reduce(
+    (sum, text) => sum + estimateClaudeCounterTokens(text),
+    0
+  );
+
+  return {
+    promptTokens,
+    outputTokens,
+    totalTokens: promptTokens + outputTokens,
+    draftPromptTokens: estimateClaudeCounterTokens(draftPrompt),
+    promptMessages: promptMessages.length,
+    outputMessages: outputMessages.length,
+    lastUpdated: new Date().toISOString(),
+    pageUrl: location.href,
+    method: "estimated-dom",
+    promptMessageTexts: promptMessages,
+    outputMessageTexts: outputMessages
+  };
+};
+
+const getClaudeOutputTextFromStats = (stats) => {
+  const outputTexts = Array.isArray(stats?.outputMessageTexts)
+    ? stats.outputMessageTexts
+    : [];
+  return normalizeClaudeCounterText(outputTexts.join("\n"));
+};
+
+const collectAiOutputText = (provider = "unknown") => {
   if (!document.body) {
     return "";
   }
 
-  for (const selector of AI_OUTPUT_SELECTORS) {
-    const nodes = document.querySelectorAll(selector);
-    if (nodes.length) {
-      let text = "";
-      nodes.forEach((node) => {
-        if (!node || isSkippableNode(node)) {
-          return;
-        }
-        const snippet = extractNodeText(node);
-        if (snippet) {
-          text += `\n${snippet}`;
-        }
-      });
-      if (text.trim()) {
-        return text;
+  const providerKey = String(provider || "unknown").toLowerCase();
+
+  if (providerKey === "claude") {
+    const claudeOutputText = getClaudeOutputTextFromStats(computeClaudeDomTokenStats());
+    if (claudeOutputText) {
+      return claudeOutputText;
+    }
+    return "";
+  }
+
+  if (providerKey !== "chatgpt") {
+    const providerSelectors = PROVIDER_OUTPUT_SELECTORS[providerKey] || [];
+    const providerOutputText = collectTextFromSelectors(
+      [...providerSelectors, ...COMMON_ASSISTANT_OUTPUT_SELECTORS],
+      {
+        minWords: 1,
+        maxSnippets: 36,
+        excludeSelectors: COMMON_USER_OUTPUT_SELECTORS
       }
+    );
+    if (providerOutputText) {
+      return providerOutputText;
     }
   }
 
-  return getDocumentTextWithoutInputs();
+  const genericOutputText = collectTextFromSelectors(AI_OUTPUT_SELECTORS, {
+    minWords: 3,
+    maxSnippets: providerKey === "chatgpt" ? null : 36
+  });
+  if (genericOutputText) {
+    return genericOutputText;
+  }
+
+  const fallbackText = getDocumentTextWithoutInputs();
+  if (providerKey === "chatgpt") {
+    return fallbackText;
+  }
+  return extractTailSlice(fallbackText, 3500);
 };
 
 const normalizeText = (text) => (text || "").replace(/\s+/g, " ").trim();
@@ -1913,13 +2641,26 @@ const markAwaitingResponse = (sourceNode = null) => {
   const inputSnapshot = captureInputSnapshot(sourceNode);
   latestPromptInputText = inputSnapshot.text || latestPromptInputText || "";
   latestInputTokenEstimate = Math.max(inputSnapshot.tokens, latestDraftInputTokenEstimate, 0);
+  latestSubmittedInputTokenEstimate = latestInputTokenEstimate;
+  accumulatedInputTokens = +(
+    (Number(accumulatedInputTokens) || 0)
+    + (Number(latestSubmittedInputTokenEstimate) || 0)
+  ).toFixed(6);
   awaitingResponse = true;
   pendingNetworkResponse = false;
   interactionId = crypto.randomUUID();
-  interactionPromptSubmittedAtById.set(interactionId, {
+  const currentInteractionId = interactionId;
+  interactionOutputTokenBaselineById.set(currentInteractionId, Math.max(0, Math.round(latestOutputTokenEstimate || 0)));
+  interactionPromptSubmittedAtById.set(currentInteractionId, {
     ms: now,
     iso: new Date(now).toISOString()
   });
+  if (interactionOutputTokenBaselineById.size > 1000) {
+    const firstBaseline = interactionOutputTokenBaselineById.keys().next();
+    if (!firstBaseline.done) {
+      interactionOutputTokenBaselineById.delete(firstBaseline.value);
+    }
+  }
   if (interactionPromptSubmittedAtById.size > 1000) {
     const first = interactionPromptSubmittedAtById.keys().next();
     if (!first.done) {
@@ -1929,6 +2670,11 @@ const markAwaitingResponse = (sourceNode = null) => {
   sessionIdPromise = resolveSessionIdForCurrentConversation().then((resolvedSession) => {
     sessionId = resolvedSession.sessionId;
     if (resolvedSession.isNewConversation) {
+      resetAccumulatedTotals();
+      accumulatedInputTokens = Number(latestSubmittedInputTokenEstimate) || 0;
+      lastLoggedOutputTokensBySession.clear();
+      interactionOutputTokenBaselineById.set(currentInteractionId, 0);
+      lastOutputFingerprint = "";
       trackNewChatStartAndMaybeNudge();
     }
     return resolvedSession.sessionId;
@@ -2144,20 +2890,30 @@ const runDetection = () => {
     return;
   }
 
+  const requiresNetworkTrigger = conversationStarted || awaitingResponse;
+  if (requiresNetworkTrigger && !pendingNetworkResponse) {
+    return;
+  }
+
   const domainMatch = findByDomain();
   const keywordMatch = domainMatch || findByKeywords();
   latestDetection = keywordMatch;
   if (!latestDetection) {
     latestModelDetection = { provider: "unknown", model: "unknown", confidence: 0 };
-    latestTokenEstimate = 0;
-    resetImpactMetrics();
-    updateBanner(null, latestTokenEstimate, latestImpactMetrics);
+    resetAccumulatedTotals();
+    latestAiOutputText = "";
+    updateBanner(null, latestTokenEstimate, latestImpactMetrics, latestOutputTokenEstimate);
     return;
   }
   latestModelDetection = detectModelFromPage(latestDetection);
   const providerKey = latestModelDetection?.provider || "unknown";
-
-  const rawOutput = collectAiOutputText();
+  const claudeStats = providerKey === "claude" ? computeClaudeDomTokenStats() : null;
+  const rawOutput = providerKey === "claude"
+    ? getClaudeOutputTextFromStats(claudeStats)
+    : collectAiOutputText(providerKey);
+  const outputTokenEstimate = providerKey === "claude"
+    ? Math.max(0, Math.round(Number(claudeStats?.outputTokens) || 0))
+    : estimateTokensFromText(rawOutput);
   const normalizedOutput = normalizeText(rawOutput);
   const hasOutput = !!normalizedOutput;
   const hasNewOutput = hasOutput && normalizedOutput !== lastOutputFingerprint;
@@ -2165,13 +2921,14 @@ const runDetection = () => {
 
   if (!hasOutput) {
     latestAiOutputText = "";
+    latestOutputTokenEstimate = 0;
     if (!awaitingResponse) {
       conversationStarted = false;
       lastOutputFingerprint = "";
     }
     latestTokenEstimate = 0;
-    resetImpactMetrics();
-    updateBanner(latestDetection, latestTokenEstimate, latestImpactMetrics);
+    latestImpactMetrics = { energyWh: 0, co2g: 0, waterL: 0 };
+    updateBanner(latestDetection, latestTokenEstimate, latestImpactMetrics, latestOutputTokenEstimate);
     pendingNetworkResponse = false;
     awaitingResponse = false;
     return;
@@ -2179,28 +2936,29 @@ const runDetection = () => {
 
   if (!conversationStarted) {
     if (!awaitingResponse) {
-      if (!hasNewOutput) {
-        return;
-      }
       lastOutputFingerprint = normalizedOutput;
+      latestAiOutputText = rawOutput;
       lastOutputUpdateAt = Date.now();
       // Before the user submits the first prompt in this session, keep visible
       // counters at zero to avoid showing stale/bootstrapped page content.
+      latestOutputTokenEstimate = outputTokenEstimate;
       latestTokenEstimate = 0;
-      resetImpactMetrics();
-      updateBanner(latestDetection, latestTokenEstimate, latestImpactMetrics);
+      latestImpactMetrics = { energyWh: 0, co2g: 0, waterL: 0 };
+      updateBanner(latestDetection, latestTokenEstimate, latestImpactMetrics, latestOutputTokenEstimate);
       return;
     }
 
     if (!hasNewOutput) {
+      latestAiOutputText = rawOutput;
+      latestOutputTokenEstimate = outputTokenEstimate;
       latestTokenEstimate = 0;
-      resetImpactMetrics();
-      updateBanner(latestDetection, latestTokenEstimate, latestImpactMetrics);
+      latestImpactMetrics = { energyWh: 0, co2g: 0, waterL: 0 };
+      updateBanner(latestDetection, latestTokenEstimate, latestImpactMetrics, latestOutputTokenEstimate);
       return;
     }
 
     conversationStarted = true;
-    awaitingResponse = isThinkingStatus;
+    awaitingResponse = false;
   }
 
   if (!hasNewOutput) {
@@ -2216,9 +2974,9 @@ const runDetection = () => {
   lastOutputFingerprint = normalizedOutput;
   latestAiOutputText = rawOutput;
   lastOutputUpdateAt = Date.now();
-  latestTokenEstimate = estimateTokensFromText(rawOutput);
-  latestImpactMetrics = createImpactMetrics(latestTokenEstimate);
-  updateBanner(latestDetection, latestTokenEstimate, latestImpactMetrics);
+  latestOutputTokenEstimate = outputTokenEstimate;
+  refreshDisplayedTotals(latestModelDetection);
+  updateBanner(latestDetection, latestTokenEstimate, latestImpactMetrics, latestOutputTokenEstimate);
   awaitingResponse = isThinkingStatus;
   pendingNetworkResponse = isThinkingStatus;
 };
@@ -2264,7 +3022,9 @@ const startObserving = () => {
 
 const init = () => {
   ensureBanner();
-  getOrCreateUserId();
+  getOrCreateUserId().finally(() => {
+    queueDetection();
+  });
   loadInitialMetricsVisibilityState();
   loadInitialEnabledState();
   registerStorageListeners();
@@ -2287,6 +3047,16 @@ if (document.readyState === "loading") {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || !message.type) {
+    return;
+  }
+  if (message.type === CLAUDE_COUNTER_REQUEST_TYPE) {
+    const stats = computeClaudeDomTokenStats();
+    const {
+      promptMessageTexts: _promptMessageTexts,
+      outputMessageTexts: _outputMessageTexts,
+      ...publicStats
+    } = stats;
+    sendResponse({ ok: true, stats: publicStats });
     return;
   }
   if (message.type === "ai-detector:getStatus") {

@@ -95,6 +95,30 @@
         color: #cbd5f5;
         min-height: 16px;
       }
+      .participant-gate-banner {
+        margin-bottom: 12px;
+        border: 1px solid rgba(148, 163, 184, 0.45);
+        border-radius: 8px;
+        background: rgba(100, 116, 139, 0.2);
+        color: #e2e8f0;
+        padding: 10px 12px;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+      }
+      .participant-gate-banner.gated {
+        background: rgba(100, 116, 139, 0.12);
+        border-color: rgba(148, 163, 184, 0.35);
+        color: #cbd5e1;
+        filter: grayscale(0.35);
+        opacity: 0.8;
+      }
+      #popup-main-content.gated {
+        opacity: 0.4;
+        filter: grayscale(0.25);
+        pointer-events: none;
+        user-select: none;
+      }
       #token-count {
         font-size: 14px;
         margin-top: 6px;
@@ -466,14 +490,16 @@
         <div id="participant-feedback"></div>
       </div>
     </details>
-    <h1>AI detected:</h1>
-    <div id="status">Checking current tab...</div>
-    <div id="token-count">Tokens detected: --</div>
-    <div class="toggle-wrapper">
-      <label>Extension status</label>
-      <button id="toggle-extension" class="enabled">Turn off detector</button>
-    </div>
-    <div id="metrics-content">
+    <div id="participant-gate-banner" class="participant-gate-banner" hidden>Please save unique user ID to continue</div>
+    <div id="popup-main-content">
+      <h1>AI detected:</h1>
+      <div id="status">Checking current tab...</div>
+      <div id="token-count">Tokens detected: --</div>
+      <div class="toggle-wrapper">
+        <label>Extension status</label>
+        <button id="toggle-extension" class="enabled">Turn off detector</button>
+      </div>
+      <div id="metrics-content">
       <section class="metrics">
         <h2>Estimated Impact</h2>
         <div class="metric-line">
@@ -506,7 +532,7 @@
         <div class="goal-line" id="goal-remaining">Remaining: --</div>
       </section>
       <details class="rolling-chart">
-        <summary>Rolling Daily Tokens (up to 60d)</summary>
+        <summary>Daily token count (up to 60d)</summary>
         <div class="chart-wrap">
           <div class="chart-main">
             <div class="chart-axis" id="rolling-chart-axis">
@@ -550,8 +576,9 @@
           <div class="model-note">Selecting lower-compute AI models can reduce computing time, energy consumption, and environmental impacts.</div>
         </div>
       </details>
+      </div>
+      <div class="note">This popup mirrors the badge shown on the page.</div>
     </div>
-    <div class="note">This popup mirrors the badge shown on the page.</div>
     <script src="popup.js"></script>
   </body>
 </html>

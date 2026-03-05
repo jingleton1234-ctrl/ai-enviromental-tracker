@@ -5,6 +5,8 @@ const participantSaveEl = document.getElementById("participant-save");
 const participantEditEl = document.getElementById("participant-edit");
 const participantFeedbackEl = document.getElementById("participant-feedback");
 const participantSummaryLabelEl = document.getElementById("participant-summary-label");
+const participantGateBannerEl = document.getElementById("participant-gate-banner");
+const popupMainContentEl = document.getElementById("popup-main-content");
 const metricEnergyEl = document.getElementById("metric-energy");
 const metricCo2El = document.getElementById("metric-co2");
 const metricWaterEl = document.getElementById("metric-water");
@@ -103,6 +105,17 @@ const updateParticipantSummaryLabel = (participantId) => {
     : "Participant ID: Not set";
 };
 
+const applyParticipantGateState = (participantId) => {
+  const hasParticipantId = Boolean(sanitizeParticipantId(participantId));
+  if (participantGateBannerEl) {
+    participantGateBannerEl.hidden = hasParticipantId;
+    participantGateBannerEl.classList.toggle("gated", !hasParticipantId);
+  }
+  if (popupMainContentEl) {
+    popupMainContentEl.classList.toggle("gated", !hasParticipantId);
+  }
+};
+
 const setParticipantEditing = (isEditing) => {
   if (!participantIdInputEl || !participantSaveEl || !participantEditEl) {
     return;
@@ -127,6 +140,7 @@ const loadParticipantId = () => {
     const participantId = sanitizeParticipantId(data?.[PARTICIPANT_ID_KEY]);
     participantIdInputEl.value = participantId;
     updateParticipantSummaryLabel(participantId);
+    applyParticipantGateState(participantId);
     if (participantId) {
       setParticipantFeedback(`Saved participant ID: ${participantId}`);
       setParticipantEditing(false);
@@ -144,12 +158,14 @@ const saveParticipantId = () => {
   const participantId = sanitizeParticipantId(participantIdInputEl.value);
   if (!participantId) {
     setParticipantFeedback("Participant ID must use letters and numbers only.");
+    applyParticipantGateState("");
     setParticipantEditing(true);
     return;
   }
   chrome.storage.local.set({ [PARTICIPANT_ID_KEY]: participantId }, () => {
     participantIdInputEl.value = participantId;
     updateParticipantSummaryLabel(participantId);
+    applyParticipantGateState(participantId);
     setParticipantFeedback(`Saved participant ID: ${participantId}`);
     setParticipantEditing(false);
   });
@@ -710,7 +726,9 @@ const registerStorageListeners = () => {
       loadAndRenderDailyStats();
     }
     if (Object.prototype.hasOwnProperty.call(changes, PARTICIPANT_ID_KEY)) {
-      updateParticipantSummaryLabel(sanitizeParticipantId(changes[PARTICIPANT_ID_KEY].newValue));
+      const participantId = sanitizeParticipantId(changes[PARTICIPANT_ID_KEY].newValue);
+      updateParticipantSummaryLabel(participantId);
+      applyParticipantGateState(participantId);
     }
   });
 };
@@ -820,6 +838,7 @@ const requestDetection = () => {
 
 const initialize = () => {
   registerChartForwardScrollLock();
+  applyParticipantGateState("");
   loadParticipantId();
   loadMetricsVisibilityPreference(() => {
     loadAndRenderDailyStats();
