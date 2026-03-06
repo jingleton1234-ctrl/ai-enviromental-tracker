@@ -928,7 +928,7 @@ const ensureBanner = () => {
     banner.style.boxShadow = "0 12px 30px rgba(15, 23, 42, 0.45)";
     banner.style.pointerEvents = "auto";
     banner.style.backdropFilter = "blur(6px)";
-    banner.style.width = "min(420px, calc(100vw - 32px))";
+    banner.style.width = "min(300px, calc(100vw - 32px))";
     banner.style.minHeight = "220px";
     banner.style.boxSizing = "border-box";
     banner.style.whiteSpace = "pre-line";
